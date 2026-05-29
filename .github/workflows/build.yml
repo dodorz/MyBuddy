@@ -1,0 +1,60 @@
+name: build
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version tag to build (v1.2.3 or 1.2.3)"
+        required: false
+        type: string
+  push:
+    tags:
+      - "v*"
+      - "*.*.*"
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: version
+        shell: pwsh
+        run: |
+          $tag = ""
+          if ("${{ github.event_name }}" -eq "push") {
+            $tag = "${{ github.ref_name }}"
+          } elseif ("${{ inputs.version }}") {
+            $tag = "${{ inputs.version }}"
+          } else {
+            $header = Get-Content src/version.h
+            if ($header -match 'MYBUDDY_VERSION_STRING\s+L"([^"]+)"') {
+              $tag = $Matches[1]
+            }
+          }
+          if ($tag.StartsWith("v")) { $tag = $tag.Substring(1) }
+          "version=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Configure
+        run: cmake --preset vs-x64
+
+      - name: Build
+        run: cmake --build --preset vs-x64-release
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $version = "${{ steps.version.outputs.version }}"
+          $zip = "MyBuddy-v$version-windows-x64.zip"
+          $root = Join-Path $PWD "package"
+          New-Item -ItemType Directory -Force -Path $root | Out-Null
+          Copy-Item -Path "build\Release\MyBuddy.exe" -Destination $root
+          Compress-Archive -Path "$root\*" -DestinationPath $zip -Force
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MyBuddy
+          path: MyBuddy-v*-windows-x64.zip
