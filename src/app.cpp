@@ -620,6 +620,7 @@ void App::FinishAnimation() {
     ShowHotZone(false);
   } else {
     SetTaskbarVisible(false);
+    HideMainWindow();
     UpdateHotZonePlacement();
   }
   SaveState();
