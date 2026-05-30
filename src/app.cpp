@@ -207,6 +207,14 @@ LRESULT App::HandleMainMessage(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         }
         return 0;
       }
+      if (wp == hotZoneTimer_) {
+        if (hotZoneVisible_ && !animation_.active && IsPointerInsideHotZone()) {
+          ShowMainWindow();
+          ShowHotZone(false);
+          BeginAnimation(true);
+        }
+        return 0;
+      }
       return 0;
     case WM_EXITSIZEMOVE:
     case WM_MOVE: {
@@ -448,8 +456,10 @@ void App::ShowHotZone(bool show) {
     SetWindowPos(hotZone_, HWND_TOPMOST, r.left, r.top,
       r.right - r.left, r.bottom - r.top,
       SWP_SHOWWINDOW | SWP_NOACTIVATE);
+    SetTimer(hwnd_, hotZoneTimer_, 80, nullptr);
   } else {
     ShowWindow(hotZone_, SW_HIDE);
+    KillTimer(hwnd_, hotZoneTimer_);
   }
 }
 
