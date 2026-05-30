@@ -38,12 +38,12 @@ jobs:
           "version=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
       - name: Configure
-        run: cmake --preset vs-x64
+        run: cmake -S . -B build\vs2022 -G "Visual Studio 17 2022" -A x64
 
       - name: Build
         run: |
-          cmake --build --preset vs-x64-debug
-          cmake --build --preset vs-x64-release
+          cmake --build build\vs2022 --config Debug
+          cmake --build build\vs2022 --config Release
 
       - name: Package
         shell: pwsh
@@ -53,8 +53,8 @@ jobs:
           $releaseZip = "MyBuddy-v$version-windows-x64-Release.zip"
           $root = Join-Path $PWD "package"
           New-Item -ItemType Directory -Force -Path $root | Out-Null
-          Copy-Item -Path "build\Debug\MyBuddy.exe" -Destination (Join-Path $root "MyBuddy-Debug.exe")
-          Copy-Item -Path "build\Release\MyBuddy.exe" -Destination (Join-Path $root "MyBuddy-Release.exe")
+          Copy-Item -Path "build\vs2022\Debug\MyBuddy.exe" -Destination (Join-Path $root "MyBuddy-Debug.exe")
+          Copy-Item -Path "build\vs2022\Release\MyBuddy.exe" -Destination (Join-Path $root "MyBuddy-Release.exe")
           Compress-Archive -Path (Join-Path $root "MyBuddy-Debug.exe") -DestinationPath $debugZip -Force
           Compress-Archive -Path (Join-Path $root "MyBuddy-Release.exe") -DestinationPath $releaseZip -Force
 

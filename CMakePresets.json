@@ -4,12 +4,13 @@
     {
       "name": "vs-x64",
       "displayName": "Visual Studio x64",
-      "generator": "Visual Studio 17 2022",
-      "binaryDir": "${sourceDir}/build",
+      "generator": "Visual Studio 18 2026",
+      "binaryDir": "${sourceDir}/build/vs-x64",
       "architecture": "x64",
       "cacheVariables": {
         "CMAKE_CXX_STANDARD": "17",
-        "CMAKE_CXX_STANDARD_REQUIRED": "ON"
+        "CMAKE_CXX_STANDARD_REQUIRED": "ON",
+        "CMAKE_GENERATOR_INSTANCE": "C:/Program Files (x86)/Microsoft Visual Studio/18/BuildTools"
       }
     }
   ],

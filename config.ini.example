@@ -1,0 +1,78 @@
+; MyBuddy example configuration.
+; Search order:
+; 1. config.ini beside MyBuddy.exe
+; 2. %AppData%\MyBuddy\config.ini
+
+[meta]
+; Application name used for the AppData directory name.
+appName=MyBuddy
+
+[notes]
+; Global file patterns, separated by ';'.
+; Typical values: *.txt;*.md
+filePatterns=*.txt;*.md
+; Maximum visible items per group.
+; Integer >= 1. Default: 5
+maxItems=5
+; Global sort field.
+; Allowed values: name, ctime, mtime
+sortBy=mtime
+; Global sort direction.
+; Allowed values: asc, desc
+sortOrder=desc
+; Whether groups start expanded by default.
+; Allowed values: 0, 1
+defaultGroupExpanded=1
+
+[action.edit]
+; Menu text shown to the user.
+title=Edit
+; Full command line.
+; Available placeholders:
+; {file} {dir} {name} {stem} {group} {group_title} {group_dir}
+command=notepad.exe "{file}"
+
+[action.reveal]
+title=Open Folder
+command=explorer.exe /select,"{file}"
+
+[action.terminal]
+title=Open Terminal
+command=wt.exe -d "{group_dir}"
+
+[note_group.inbox]
+; Group title shown in the main list.
+title=Inbox
+; Absolute directory path for this group.
+; Required.
+path=C:\Users\USERNAME\Documents\Notes\Inbox
+; Optional per-group override. Allowed values: 0, 1
+; expanded=1
+; Optional per-group override for file patterns.
+; filePatterns=*.txt;*.md
+; Optional per-group override for max visible items.
+; maxItems=5
+; Optional per-group override for sort field.
+; Allowed values: name, ctime, mtime
+; sortBy=mtime
+; Optional per-group override for sort direction.
+; Allowed values: asc, desc
+; sortOrder=desc
+; Action id used when clicking a file item or after creating a new file.
+defaultFileAction=edit
+; Additional file-item context menu actions, separated by ';'.
+fileActions=edit;reveal
+; Group-header context menu actions, separated by ';'.
+groupActions=terminal
+
+[note_group.work]
+title=Work
+path=C:\Users\USERNAME\Documents\Notes\Work
+; This group only shows markdown files.
+filePatterns=*.md
+maxItems=8
+sortBy=name
+sortOrder=asc
+defaultFileAction=edit
+fileActions=edit;reveal
+groupActions=terminal
