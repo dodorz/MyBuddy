@@ -256,6 +256,8 @@ LRESULT App::HandleHotZoneMessage(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_CREATE:
       SetLayeredWindowAttributes(hwnd, 0, 1, LWA_ALPHA);
       return 0;
+    case WM_MOUSEACTIVATE:
+      return MA_NOACTIVATE;
     case WM_MOUSEMOVE: {
       TRACKMOUSEEVENT tme{ sizeof(tme), TME_LEAVE, hwnd, 0 };
       TrackMouseEvent(&tme);
@@ -338,7 +340,7 @@ void App::InitializeDefaultState() {
 void App::CreateHotZoneWindow() {
   if (hotZone_) return;
   hotZone_ = CreateWindowExW(
-    WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_LAYERED | WS_EX_NOACTIVATE,
+    WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_LAYERED,
     kHotZoneClass,
     L"",
     WS_POPUP,
