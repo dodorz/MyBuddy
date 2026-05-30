@@ -91,7 +91,7 @@ int App::Run(HINSTANCE instance, int showCmd) {
   title += MYBUDDY_VERSION_STRING;
 
   hwnd_ = CreateWindowExW(
-    WS_EX_APPWINDOW,
+    WS_EX_APPWINDOW | WS_EX_TOPMOST,
     kMainClass,
     title.c_str(),
     WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME | WS_MINIMIZEBOX,
