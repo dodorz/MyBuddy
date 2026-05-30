@@ -14,5 +14,8 @@ add_executable(MyBuddy WIN32
 
 target_include_directories(MyBuddy PRIVATE src)
 target_link_libraries(MyBuddy PRIVATE user32 gdi32 comctl32 shell32 advapi32)
+if(MINGW)
+  target_link_options(MyBuddy PRIVATE -municode)
+endif()
 
 target_compile_definitions(MyBuddy PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)

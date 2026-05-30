@@ -184,13 +184,27 @@ LRESULT App::HandleMainMessage(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         TrackMouseEvent(&tme);
         trackingLeave_ = true;
       }
+      DisarmCollapseTimer();
       return 0;
     case WM_MOUSELEAVE:
       trackingLeave_ = false;
+      if (state_.expanded && !animation_.active) {
+        ArmCollapseTimer();
+      }
+      return 0;
+    case WM_ENTERSIZEMOVE:
+      DisarmCollapseTimer();
       return 0;
     case WM_TIMER:
       if (wp == animationTimer_) {
         TickAnimation();
+        return 0;
+      }
+      if (wp == collapseTimer_) {
+        DisarmCollapseTimer();
+        if (!IsPointerInsideMain() && state_.expanded && !animation_.active) {
+          RequestCollapse();
+        }
         return 0;
       }
       return 0;
@@ -242,7 +256,12 @@ LRESULT App::HandleHotZoneMessage(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_CREATE:
       SetLayeredWindowAttributes(hwnd, 0, 1, LWA_ALPHA);
       return 0;
-    case WM_MOUSEMOVE:
+    case WM_MOUSEMOVE: {
+      TRACKMOUSEEVENT tme{ sizeof(tme), TME_LEAVE, hwnd, 0 };
+      TrackMouseEvent(&tme);
+      UpdateHotZoneTrigger();
+      return 0;
+    }
     case WM_MOUSELEAVE:
       UpdateHotZoneTrigger();
       return 0;
@@ -411,18 +430,34 @@ RECT App::GetHotZoneRect() const {
 }
 
 void App::UpdateHotZonePlacement() {
-  ShowHotZone(false);
+  if (!state_.expanded && !animation_.active) {
+    if (!hotZone_) CreateHotZoneWindow();
+    ShowHotZone(true);
+  } else {
+    ShowHotZone(false);
+  }
 }
 
 void App::ShowHotZone(bool show) {
-  hotZoneVisible_ = false;
-  if (hotZone_) {
+  hotZoneVisible_ = show;
+  if (!hotZone_) return;
+  if (show) {
+    RECT r = GetHotZoneRect();
+    SetWindowPos(hotZone_, HWND_TOPMOST, r.left, r.top,
+      r.right - r.left, r.bottom - r.top,
+      SWP_SHOWWINDOW | SWP_NOACTIVATE);
+  } else {
     ShowWindow(hotZone_, SW_HIDE);
   }
 }
 
 void App::UpdateHotZoneTrigger() {
-  return;
+  if (!hotZoneVisible_ || animation_.active) return;
+  if (IsPointerInsideHotZone()) {
+    ShowMainWindow();
+    ShowHotZone(false);
+    BeginAnimation(true);
+  }
 }
 
 void App::ShowMainWindow() {
@@ -509,7 +544,9 @@ void App::RequestExpand() {
 }
 
 void App::RequestCollapse() {
-  return;
+  if (!state_.expanded || animation_.active) return;
+  DisarmCollapseTimer();
+  BeginAnimation(false);
 }
 
 void App::BeginAnimation(bool expanded) {
@@ -518,7 +555,7 @@ void App::BeginAnimation(bool expanded) {
   animation_.from = currentRect_;
   animation_.to = expanded ? GetTargetRect(true) : GetTargetRect(false);
   animation_.startTick = GetTickCount64();
-  animation_.durationMs = expanded ? std::max(60, config_.slideMs - 200) : std::max(120, config_.slideMs + 220);
+  animation_.durationMs = expanded ? std::max(80, config_.slideMs - 80) : std::max(150, config_.slideMs);
   SetTimer(hwnd_, animationTimer_, 16, nullptr);
 }
 
@@ -567,10 +604,10 @@ void App::FinishAnimation() {
   if (state_.expanded) {
     state_.w = currentRect_.right - currentRect_.left;
     state_.h = currentRect_.bottom - currentRect_.top;
-    SetTaskbarVisible(false);
+    SetTaskbarVisible(true);
     ShowHotZone(false);
   } else {
-    SetTaskbarVisible(true);
+    SetTaskbarVisible(false);
     UpdateHotZonePlacement();
   }
   SaveState();
@@ -596,7 +633,12 @@ bool App::IsPointerInsideMain() const {
 }
 
 bool App::IsPointerInsideHotZone() const {
-  return false;
+  if (!hotZone_ || !hotZoneVisible_) return false;
+  POINT pt{};
+  GetCursorPos(&pt);
+  RECT r{};
+  GetWindowRect(hotZone_, &r);
+  return PtInRect(&r, pt);
 }
 
 std::wstring App::GetAppDataDir() const {
