@@ -41,20 +41,27 @@ jobs:
         run: cmake --preset vs-x64
 
       - name: Build
-        run: cmake --build --preset vs-x64-release
+        run: |
+          cmake --build --preset vs-x64-debug
+          cmake --build --preset vs-x64-release
 
       - name: Package
         shell: pwsh
         run: |
           $version = "${{ steps.version.outputs.version }}"
-          $zip = "MyBuddy-v$version-windows-x64.zip"
+          $debugZip = "MyBuddy-v$version-windows-x64-Debug.zip"
+          $releaseZip = "MyBuddy-v$version-windows-x64-Release.zip"
           $root = Join-Path $PWD "package"
           New-Item -ItemType Directory -Force -Path $root | Out-Null
-          Copy-Item -Path "build\Release\MyBuddy.exe" -Destination $root
-          Compress-Archive -Path "$root\*" -DestinationPath $zip -Force
+          Copy-Item -Path "build\Debug\MyBuddy.exe" -Destination (Join-Path $root "MyBuddy-Debug.exe")
+          Copy-Item -Path "build\Release\MyBuddy.exe" -Destination (Join-Path $root "MyBuddy-Release.exe")
+          Compress-Archive -Path (Join-Path $root "MyBuddy-Debug.exe") -DestinationPath $debugZip -Force
+          Compress-Archive -Path (Join-Path $root "MyBuddy-Release.exe") -DestinationPath $releaseZip -Force
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: MyBuddy
-          path: MyBuddy-v*-windows-x64.zip
+          path: |
+            MyBuddy-v*-windows-x64-Debug.zip
+            MyBuddy-v*-windows-x64-Release.zip

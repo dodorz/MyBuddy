@@ -5,14 +5,15 @@
 
 namespace {
 struct StateBlob {
-  char magic[8] = {'M','B','S','T','A','T','E','1'};
-  int version = 1;
+  char magic[8] = {'M','B','S','T','A','T','E','2'};
+  int version = 2;
   int dockEdge = 0;
   int x = 0;
   int y = 0;
   int w = 0;
   int h = 0;
   int expanded = 0;
+  int taskbarVisible = 1;
 };
 }
 
@@ -23,7 +24,7 @@ bool LoadAppState(AppState& state, const std::wstring& path) {
   DWORD read = 0;
   BOOL ok = ReadFile(h, &blob, sizeof(blob), &read, nullptr);
   CloseHandle(h);
-  if (!ok || read != sizeof(blob) || std::memcmp(blob.magic, "MBSTATE1", 8) != 0) return false;
+  if (!ok || read < sizeof(int) * 7 || std::memcmp(blob.magic, "MBSTATE", 7) != 0) return false;
   state.version = blob.version;
   state.dockEdge = blob.dockEdge;
   state.x = blob.x;
@@ -31,6 +32,7 @@ bool LoadAppState(AppState& state, const std::wstring& path) {
   state.w = blob.w;
   state.h = blob.h;
   state.expanded = blob.expanded != 0;
+  state.taskbarVisible = read >= sizeof(blob) ? blob.taskbarVisible != 0 : true;
   return true;
 }
 
@@ -43,6 +45,7 @@ void SaveAppState(const AppState& state, const std::wstring& path) {
   blob.w = state.w;
   blob.h = state.h;
   blob.expanded = state.expanded ? 1 : 0;
+  blob.taskbarVisible = state.taskbarVisible ? 1 : 0;
   HANDLE h = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
   if (h == INVALID_HANDLE_VALUE) return;
   DWORD written = 0;

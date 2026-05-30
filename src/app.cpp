@@ -12,6 +12,8 @@
 namespace {
 constexpr UINT kTrayMsg = WM_APP + 1;
 constexpr UINT kTrayIconId = 1001;
+constexpr UINT kTrayOpenCmd = 2001;
+constexpr UINT kTrayExitCmd = 2002;
 constexpr wchar_t kMainClass[] = L"MyBuddyMainClass";
 constexpr wchar_t kHotZoneClass[] = L"MyBuddyHotZoneClass";
 
@@ -38,6 +40,28 @@ void RemoveTrayIcon(HWND hwnd) {
   nid.hWnd = hwnd;
   nid.uID = kTrayIconId;
   Shell_NotifyIconW(NIM_DELETE, &nid);
+}
+
+void UpdateTrayIconTip(HWND hwnd, const wchar_t* tip) {
+  NOTIFYICONDATAW nid{};
+  nid.cbSize = sizeof(nid);
+  nid.hWnd = hwnd;
+  nid.uID = kTrayIconId;
+  nid.uFlags = NIF_TIP;
+  wcscpy_s(nid.szTip, tip);
+  Shell_NotifyIconW(NIM_MODIFY, &nid);
+}
+
+void ShowTrayContextMenu(HWND hwnd, POINT pt) {
+  HMENU menu = CreatePopupMenu();
+  if (!menu) return;
+  AppendMenuW(menu, MF_STRING, kTrayOpenCmd, L"Open");
+  AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+  AppendMenuW(menu, MF_STRING, kTrayExitCmd, L"Exit");
+  SetForegroundWindow(hwnd);
+  TrackPopupMenu(menu, TPM_RIGHTBUTTON | TPM_LEFTALIGN | TPM_TOPALIGN, pt.x, pt.y, 0, hwnd, nullptr);
+  PostMessageW(hwnd, WM_NULL, 0, 0);
+  DestroyMenu(menu);
 }
 
 }
@@ -70,7 +94,7 @@ int App::Run(HINSTANCE instance, int showCmd) {
     WS_EX_APPWINDOW,
     kMainClass,
     title.c_str(),
-    WS_POPUP | WS_THICKFRAME,
+    WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME | WS_MINIMIZEBOX,
     CW_USEDEFAULT,
     CW_USEDEFAULT,
     state_.w,
@@ -82,6 +106,7 @@ int App::Run(HINSTANCE instance, int showCmd) {
   if (!hwnd_) return 0;
 
   AddTrayIcon(hwnd_);
+  UpdateTrayIconTip(hwnd_, title.c_str());
   ShowWindow(hwnd_, showCmd);
   UpdateWindow(hwnd_);
 
@@ -119,25 +144,33 @@ LRESULT App::HandleMainMessage(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
   switch (msg) {
     case WM_CREATE: {
       LoadConfig();
-      LoadState();
+      stateLoaded_ = LoadState();
+      if (!stateLoaded_) {
+        InitializeDefaultState();
+      }
+      state_.expanded = true;
+      taskbarVisible_ = state_.taskbarVisible;
+      if (!stateLoaded_) {
+        taskbarVisible_ = true;
+        state_.taskbarVisible = true;
+      }
       status_ = CreateWindowExW(0, L"STATIC", L"MyBuddy ready", WS_CHILD | WS_VISIBLE,
                                 16, 16, 280, 24, hwnd, nullptr, instance_, nullptr);
       CreateWindowExW(0, L"BUTTON", L"Demo Action", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
                       16, 52, 120, 28, hwnd, reinterpret_cast<HMENU>(1), instance_, nullptr);
       ApplySavedGeometry();
-      ShowWindow(hwnd, state_.expanded ? SW_SHOWNA : SW_SHOWNOACTIVATE);
-      if (!state_.expanded && config_.autoHide) {
-        ShowMainWindow();
-        RequestCollapse();
-      } else {
-        ShowMainWindow();
-        ShowHotZone(false);
-      }
+      ShowMainWindow();
+      ShowHotZone(false);
       return 0;
     }
     case WM_COMMAND:
       if (LOWORD(wp) == 1) {
         MessageBoxW(hwnd, L"Placeholder action", L"MyBuddy", MB_OK | MB_ICONINFORMATION);
+      } else if (LOWORD(wp) == kTrayOpenCmd) {
+        ShowMainWindow();
+        RequestExpand();
+      } else if (LOWORD(wp) == kTrayExitCmd) {
+        ExitFromTray();
       }
       return 0;
     case WM_SIZE:
@@ -151,23 +184,11 @@ LRESULT App::HandleMainMessage(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         TrackMouseEvent(&tme);
         trackingLeave_ = true;
       }
-      if (config_.autoHide) {
-        DisarmCollapseTimer();
-      }
       return 0;
     case WM_MOUSELEAVE:
       trackingLeave_ = false;
-      if (config_.autoHide && state_.expanded) {
-        ArmCollapseTimer();
-      }
       return 0;
     case WM_TIMER:
-      if (wp == collapseTimer_) {
-        if (config_.autoHide && state_.expanded && !IsPointerInsideMain() && !IsPointerInsideHotZone()) {
-          RequestCollapse();
-        }
-        return 0;
-      }
       if (wp == animationTimer_) {
         TickAnimation();
         return 0;
@@ -190,11 +211,7 @@ LRESULT App::HandleMainMessage(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
       return 0;
     }
     case WM_CLOSE:
-      closing_ = true;
-      DestroyHotZoneWindow();
-      RemoveTrayIcon(hwnd);
-      SaveState();
-      DestroyWindow(hwnd);
+      ShowToTray();
       return 0;
     case WM_DESTROY:
       PostQuitMessage(0);
@@ -208,6 +225,10 @@ LRESULT App::HandleMainMessage(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             ShowMainWindow();
             RequestExpand();
           }
+        } else if (LOWORD(lp) == WM_RBUTTONUP) {
+          POINT pt{};
+          GetCursorPos(&pt);
+          ShowTrayMenu(pt);
         }
         return 0;
       }
@@ -222,12 +243,8 @@ LRESULT App::HandleHotZoneMessage(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
       SetLayeredWindowAttributes(hwnd, 0, 1, LWA_ALPHA);
       return 0;
     case WM_MOUSEMOVE:
-      RequestExpand();
-      return 0;
     case WM_MOUSELEAVE:
-      if (config_.autoHide && state_.expanded) {
-        ArmCollapseTimer();
-      }
+      UpdateHotZoneTrigger();
       return 0;
   }
   return DefWindowProcW(hwnd, msg, wp, lp);
@@ -244,6 +261,59 @@ bool App::LoadState() {
 
 void App::SaveState() const {
   SaveAppState(state_, GetStatePath());
+}
+
+void App::SetTaskbarVisible(bool visible) {
+  taskbarVisible_ = visible;
+  state_.taskbarVisible = visible;
+  LONG_PTR ex = GetWindowLongPtrW(hwnd_, GWL_EXSTYLE);
+  ex &= ~(WS_EX_APPWINDOW | WS_EX_TOOLWINDOW);
+  if (visible) {
+    ex |= WS_EX_APPWINDOW;
+  } else {
+    ex |= WS_EX_TOOLWINDOW;
+  }
+  SetWindowLongPtrW(hwnd_, GWL_EXSTYLE, ex);
+  SetWindowPos(hwnd_, nullptr, 0, 0, 0, 0,
+    SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+}
+
+void App::ShowToTray() {
+  closing_ = false;
+  state_.expanded = false;
+  SetTaskbarVisible(false);
+  HideMainWindow();
+  ShowHotZone(false);
+  SaveState();
+}
+
+void App::ExitFromTray() {
+  closing_ = true;
+  DestroyHotZoneWindow();
+  RemoveTrayIcon(hwnd_);
+  SaveState();
+  DestroyWindow(hwnd_);
+}
+
+void App::ShowTrayMenu(POINT pt) {
+  SetForegroundWindow(hwnd_);
+  HMENU menu = CreatePopupMenu();
+  AppendMenuW(menu, MF_STRING, kTrayOpenCmd, L"Open");
+  AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+  AppendMenuW(menu, MF_STRING, kTrayExitCmd, L"Exit");
+  TrackPopupMenu(menu, TPM_RIGHTBUTTON | TPM_BOTTOMALIGN | TPM_LEFTALIGN, pt.x, pt.y, 0, hwnd_, nullptr);
+  DestroyMenu(menu);
+}
+
+void App::InitializeDefaultState() {
+  RECT work = GetWorkArea();
+  state_.dockEdge = 1;
+  state_.w = 360;
+  state_.h = 520;
+  state_.x = work.right - state_.w - 40;
+  state_.y = work.top + 80;
+  state_.expanded = true;
+  state_.taskbarVisible = false;
 }
 
 void App::CreateHotZoneWindow() {
@@ -279,12 +349,13 @@ void App::SetDockEdgeFromRect(const RECT& rc) {
   int rightDist = abs(work.right - rc.right);
   int topDist = abs(rc.top - work.top);
   int bottomDist = abs(work.bottom - rc.bottom);
-  if (leftDist <= rightDist && leftDist <= topDist && leftDist <= bottomDist) {
-    state_.dockEdge = 0;
-  } else if (rightDist <= topDist && rightDist <= bottomDist) {
-    state_.dockEdge = 1;
-  } else if (topDist <= bottomDist) {
+  int minDist = std::min(std::min(leftDist, rightDist), std::min(topDist, bottomDist));
+  if (topDist == minDist) {
     state_.dockEdge = 2;
+  } else if (rightDist == minDist) {
+    state_.dockEdge = 1;
+  } else if (leftDist == minDist) {
+    state_.dockEdge = 0;
   } else {
     state_.dockEdge = 3;
   }
@@ -308,61 +379,50 @@ RECT App::GetTargetRect(bool expanded) const {
       y = work.top + 40;
       return RECT{ x, y, x + (expanded ? fullW : peek), y + fullH };
     case DockEdge::Top:
-      x = work.left + 40;
+      x = std::max<int>(work.left, std::min<int>(state_.x, work.right - fullW));
       y = expanded ? work.top : work.top - (fullH - peek);
       return RECT{ x, y, x + fullW, y + (expanded ? fullH : peek) };
     case DockEdge::Bottom:
     default:
-      x = work.left + 40;
+      x = std::max<int>(work.left, std::min<int>(state_.x, work.right - fullW));
       y = expanded ? work.bottom - fullH : work.bottom - peek;
       return RECT{ x, y, x + fullW, y + (expanded ? fullH : peek) };
   }
 }
 
 RECT App::GetHiddenRect() const {
-  return GetTargetRect(false);
+  return GetTargetRect(true);
+}
+
+RECT App::GetHotZoneRect() const {
+  RECT work = GetWorkArea();
+  int peek = std::max(4, config_.edgePeekPx);
+  switch (static_cast<DockEdge>(state_.dockEdge)) {
+    case DockEdge::Left:
+      return RECT{ work.left, work.top, work.left + peek, work.bottom };
+    case DockEdge::Right:
+      return RECT{ work.right - peek, work.top, work.right, work.bottom };
+    case DockEdge::Top:
+      return RECT{ work.left, work.top, work.right, work.top + peek };
+    case DockEdge::Bottom:
+    default:
+      return RECT{ work.left, work.bottom - peek, work.right, work.bottom };
+  }
 }
 
 void App::UpdateHotZonePlacement() {
-  if (!hotZone_) {
-    CreateHotZoneWindow();
-  }
-  if (!hotZone_) return;
-
-  RECT work = GetWorkArea();
-  int peek = std::max(4, config_.edgePeekPx);
-  RECT r{};
-  switch (static_cast<DockEdge>(state_.dockEdge)) {
-    case DockEdge::Left:
-      r = RECT{ work.left, work.top, work.left + peek, work.bottom };
-      break;
-    case DockEdge::Right:
-      r = RECT{ work.right - peek, work.top, work.right, work.bottom };
-      break;
-    case DockEdge::Top:
-      r = RECT{ work.left, work.top, work.right, work.top + peek };
-      break;
-    case DockEdge::Bottom:
-    default:
-      r = RECT{ work.left, work.bottom - peek, work.right, work.bottom };
-      break;
-  }
-
-  SetWindowPos(
-    hotZone_,
-    HWND_TOPMOST,
-    r.left,
-    r.top,
-    r.right - r.left,
-    r.bottom - r.top,
-    SWP_NOACTIVATE | SWP_SHOWWINDOW);
-  ShowHotZone(!state_.expanded && config_.autoHide);
+  ShowHotZone(false);
 }
 
 void App::ShowHotZone(bool show) {
-  if (!hotZone_) return;
-  hotZoneVisible_ = show;
-  ShowWindow(hotZone_, show ? SW_SHOWNOACTIVATE : SW_HIDE);
+  hotZoneVisible_ = false;
+  if (hotZone_) {
+    ShowWindow(hotZone_, SW_HIDE);
+  }
+}
+
+void App::UpdateHotZoneTrigger() {
+  return;
 }
 
 void App::ShowMainWindow() {
@@ -375,15 +435,53 @@ void App::HideMainWindow() {
 }
 
 void App::ApplySavedGeometry() {
-  if (state_.version != 1) {
-    state_.version = 1;
+  if (state_.version != 2) {
+    state_.version = 2;
   }
   if (state_.w <= 0 || state_.h <= 0) {
     state_.w = 360;
     state_.h = 520;
   }
-  RECT target = state_.expanded ? GetTargetRect(true) : GetTargetRect(false);
+  RECT work = GetWorkArea();
+  if (!stateLoaded_) {
+    int minX = work.left + 20;
+    int maxX = work.right - state_.w - 20;
+    int minY = work.top + 20;
+    int maxY = work.bottom - state_.h - 20;
+    if (maxX < minX) maxX = minX;
+    if (maxY < minY) maxY = minY;
+    state_.x = std::max(minX, std::min(state_.x, maxX));
+    state_.y = std::max(minY, std::min(state_.y, maxY));
+  }
+  if (startupRestoreExpanded_ && state_.expanded) {
+    RECT work = GetWorkArea();
+    int fullW = std::max(280, state_.w);
+    int fullH = std::max(260, state_.h);
+    state_.dockEdge = std::clamp(state_.dockEdge, 0, 3);
+    switch (static_cast<DockEdge>(state_.dockEdge)) {
+      case DockEdge::Left:
+        state_.x = work.left + 20;
+        state_.y = work.top + 80;
+        break;
+      case DockEdge::Right:
+        state_.x = std::max(work.left + 20, work.right - fullW - 20);
+        state_.y = work.top + 80;
+        break;
+      case DockEdge::Top:
+        state_.x = work.left + 80;
+        state_.y = work.top + 20;
+        break;
+      case DockEdge::Bottom:
+      default:
+        state_.x = work.left + 80;
+        state_.y = std::max(work.top + 20, work.bottom - fullH - 20);
+        break;
+    }
+  }
+
+  RECT target = GetTargetRect(true);
   currentRect_ = target;
+  SetTaskbarVisible(state_.taskbarVisible);
   SetWindowPos(
     hwnd_,
     HWND_TOPMOST,
@@ -392,23 +490,26 @@ void App::ApplySavedGeometry() {
     target.right - target.left,
     target.bottom - target.top,
     SWP_NOACTIVATE | SWP_NOZORDER);
+  if (state_.expanded) {
+    SetForegroundWindow(hwnd_);
+  }
   UpdateHotZonePlacement();
 }
 
 void App::RequestExpand() {
-  DisarmCollapseTimer();
   ShowMainWindow();
-  if (!state_.expanded) {
-    BeginAnimation(true);
-  } else {
-    UpdateHotZonePlacement();
-  }
+  SetTaskbarVisible(true);
+  state_.expanded = true;
+  RECT target = GetTargetRect(true);
+  currentRect_ = target;
+  SetWindowPos(hwnd_, HWND_TOPMOST, target.left, target.top,
+    target.right - target.left, target.bottom - target.top,
+    SWP_NOACTIVATE | SWP_NOZORDER);
+  SaveState();
 }
 
 void App::RequestCollapse() {
-  if (!config_.autoHide || closing_) return;
-  if (animation_.active || !state_.expanded) return;
-  BeginAnimation(false);
+  return;
 }
 
 void App::BeginAnimation(bool expanded) {
@@ -417,6 +518,7 @@ void App::BeginAnimation(bool expanded) {
   animation_.from = currentRect_;
   animation_.to = expanded ? GetTargetRect(true) : GetTargetRect(false);
   animation_.startTick = GetTickCount64();
+  animation_.durationMs = expanded ? std::max(60, config_.slideMs - 200) : std::max(120, config_.slideMs + 220);
   SetTimer(hwnd_, animationTimer_, 16, nullptr);
 }
 
@@ -427,9 +529,8 @@ void App::TickAnimation() {
   }
 
   ULONGLONG now = GetTickCount64();
-  int duration = std::max(1, config_.slideMs);
-  double t = std::clamp(static_cast<double>(now - animation_.startTick) / duration, 0.0, 1.0);
-  double eased = 1.0 - (1.0 - t) * (1.0 - t);
+  int duration = std::max(1, animation_.durationMs);
+  double eased = std::clamp(static_cast<double>(now - animation_.startTick) / duration, 0.0, 1.0);
 
   auto lerp = [eased](int a, int b) {
     return static_cast<int>(a + (b - a) * eased);
@@ -451,7 +552,7 @@ void App::TickAnimation() {
     SWP_NOACTIVATE | SWP_NOZORDER);
 
   currentRect_ = r;
-  if (t >= 1.0) {
+  if (eased >= 1.0) {
     FinishAnimation();
   }
 }
@@ -463,11 +564,13 @@ void App::FinishAnimation() {
   state_.expanded = animation_.targetExpanded;
   state_.x = currentRect_.left;
   state_.y = currentRect_.top;
-  state_.w = currentRect_.right - currentRect_.left;
-  state_.h = currentRect_.bottom - currentRect_.top;
   if (state_.expanded) {
+    state_.w = currentRect_.right - currentRect_.left;
+    state_.h = currentRect_.bottom - currentRect_.top;
+    SetTaskbarVisible(false);
     ShowHotZone(false);
   } else {
+    SetTaskbarVisible(true);
     UpdateHotZonePlacement();
   }
   SaveState();
@@ -493,12 +596,7 @@ bool App::IsPointerInsideMain() const {
 }
 
 bool App::IsPointerInsideHotZone() const {
-  if (!hotZone_ || !IsWindowVisible(hotZone_)) return false;
-  POINT pt{};
-  GetCursorPos(&pt);
-  RECT r{};
-  GetWindowRect(hotZone_, &r);
-  return PtInRect(&r, pt);
+  return false;
 }
 
 std::wstring App::GetAppDataDir() const {

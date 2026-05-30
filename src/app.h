@@ -6,18 +6,19 @@
 struct AppConfig {
   std::wstring appName = L"MyBuddy";
   int edgePeekPx = 8;
-  int slideMs = 160;
+  int slideMs = 280;
   bool autoHide = true;
 };
 
 struct AppState {
-  int version = 1;
+  int version = 2;
   int dockEdge = 1;
   int x = 0;
   int y = 0;
   int w = 360;
   int h = 520;
   bool expanded = false;
+  bool taskbarVisible = true;
 };
 
 class App {
@@ -34,6 +35,7 @@ private:
     RECT from{};
     RECT to{};
     ULONGLONG startTick = 0;
+    int durationMs = 0;
   };
 
   static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
@@ -44,12 +46,18 @@ private:
   bool LoadConfig();
   bool LoadState();
   void SaveState() const;
+  void InitializeDefaultState();
+  void SetTaskbarVisible(bool visible);
+  void ShowToTray();
+  void ExitFromTray();
+  void ShowTrayMenu(POINT pt);
 
   void CreateHotZoneWindow();
   void DestroyHotZoneWindow();
   void SyncGeometry(bool expanded, bool animate);
   RECT GetTargetRect(bool expanded) const;
   RECT GetHiddenRect() const;
+  RECT GetHotZoneRect() const;
   void UpdateHotZonePlacement();
   void ShowHotZone(bool show);
   void RequestExpand();
@@ -63,6 +71,7 @@ private:
   bool IsPointerInsideHotZone() const;
   void ArmCollapseTimer();
   void DisarmCollapseTimer();
+  void UpdateHotZoneTrigger();
   void ShowMainWindow();
   void HideMainWindow();
   void ApplySavedGeometry();
@@ -82,7 +91,11 @@ private:
   bool trackingLeave_ = false;
   bool hotZoneVisible_ = false;
   bool closing_ = false;
+  bool stateLoaded_ = false;
+  bool startupRestoreExpanded_ = false;
+  bool taskbarVisible_ = true;
   UINT_PTR collapseTimer_ = 1;
   UINT_PTR animationTimer_ = 2;
+  UINT_PTR hotZoneTimer_ = 3;
   RECT currentRect_{};
 };
