@@ -34,6 +34,10 @@ constexpr int kExpandDurationMs = 210;
 constexpr int kCollapseDurationMs = 300;
 constexpr int kAnimationTickMs = 16;
 
+int GetResizeBorderThickness() {
+  return GetSystemMetrics(SM_CXSIZEFRAME) + GetSystemMetrics(SM_CXPADDEDBORDER);
+}
+
 std::wstring EnsureTrailingSlash(std::wstring path) {
   if (!path.empty() && path.back() != L'\\') path.push_back(L'\\');
   return path;
@@ -339,7 +343,7 @@ int App::Run(HINSTANCE instance, int showCmd) {
     WS_EX_APPWINDOW | WS_EX_TOPMOST,
     kMainClass,
     title.c_str(),
-    WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME | WS_MINIMIZEBOX,
+    WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
     CW_USEDEFAULT,
     CW_USEDEFAULT,
     state_.w,
@@ -396,6 +400,10 @@ LRESULT CALLBACK App::ListBoxProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 LRESULT App::HandleMainMessage(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
   switch (msg) {
     case WM_CREATE: {
+      if (HMENU systemMenu = GetSystemMenu(hwnd, FALSE)) {
+        DeleteMenu(systemMenu, SC_MAXIMIZE, MF_BYCOMMAND);
+        DrawMenuBar(hwnd);
+      }
       LoadConfig();
       stateLoaded_ = LoadState();
       if (!stateLoaded_) {
@@ -499,6 +507,37 @@ LRESULT App::HandleMainMessage(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
       SyncHotZone();
       return 0;
     }
+    case WM_NCHITTEST: {
+      LRESULT hit = DefWindowProcW(hwnd, msg, wp, lp);
+      if (hit != HTCLIENT) return hit;
+
+      RECT windowRect{};
+      GetWindowRect(hwnd, &windowRect);
+      const int border = GetResizeBorderThickness();
+      const int x = GET_X_LPARAM(lp);
+      const int y = GET_Y_LPARAM(lp);
+
+      const bool left = x >= windowRect.left && x < windowRect.left + border;
+      const bool right = x < windowRect.right && x >= windowRect.right - border;
+      const bool top = y >= windowRect.top && y < windowRect.top + border;
+      const bool bottom = y < windowRect.bottom && y >= windowRect.bottom - border;
+
+      if (top && left) return HTTOPLEFT;
+      if (top && right) return HTTOPRIGHT;
+      if (bottom && left) return HTBOTTOMLEFT;
+      if (bottom && right) return HTBOTTOMRIGHT;
+      if (left) return HTLEFT;
+      if (right) return HTRIGHT;
+      if (top) return HTTOP;
+      if (bottom) return HTBOTTOM;
+      return hit;
+    }
+    case WM_NCLBUTTONDBLCLK:
+      if (wp == HTCAPTION) return 0;
+      break;
+    case WM_SYSCOMMAND:
+      if ((wp & 0xFFF0) == SC_MAXIMIZE) return 0;
+      break;
     case WM_CLOSE:
       ShowToTray();
       return 0;
