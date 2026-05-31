@@ -9,8 +9,11 @@
 #include <shlobj.h>
 #include <windowsx.h>
 
+#include <algorithm>
+
 namespace {
 constexpr UINT kTrayMsg = WM_APP + 1;
+constexpr UINT kSingleInstanceShowMsg = WM_APP + 2;
 constexpr UINT kTrayIconId = 1001;
 constexpr UINT kTrayOpenCmd = 2001;
 constexpr UINT kTrayExitCmd = 2002;
@@ -19,6 +22,7 @@ constexpr int kGroupIndent = 14;
 constexpr int kFileIndent = 28;
 constexpr int kGroupAddWidth = 32;
 constexpr wchar_t kMainClass[] = L"MyBuddyMainClass";
+constexpr wchar_t kSingleInstanceMutexName[] = L"Local\\MyBuddy.SingleInstance";
 
 std::wstring EnsureTrailingSlash(std::wstring path) {
   if (!path.empty() && path.back() != L'\\') path.push_back(L'\\');
@@ -90,10 +94,115 @@ std::wstring GetGroupStatusMessage(NoteGroupLoadState state, const NoteGroupConf
       return L"";
   }
 }
+
+std::string EncodeUtf8(const std::wstring& text) {
+  if (text.empty()) return {};
+  int size = WideCharToMultiByte(CP_UTF8, 0, text.c_str(), static_cast<int>(text.size()), nullptr, 0, nullptr, nullptr);
+  if (size <= 0) return {};
+  std::string utf8(size, '\0');
+  WideCharToMultiByte(CP_UTF8, 0, text.c_str(), static_cast<int>(text.size()), utf8.data(), size, nullptr, nullptr);
+  return utf8;
+}
+
+bool WriteUtf8TextFile(const std::wstring& path, const std::wstring& text, std::wstring* errorMessage) {
+  HANDLE file = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+  if (file == INVALID_HANDLE_VALUE) {
+    if (errorMessage) *errorMessage = L"Failed to write temporary note: " + std::to_wstring(GetLastError());
+    return false;
+  }
+
+  const unsigned char bom[] = {0xEF, 0xBB, 0xBF};
+  DWORD written = 0;
+  BOOL ok = WriteFile(file, bom, static_cast<DWORD>(std::size(bom)), &written, nullptr);
+  if (!ok) {
+    if (errorMessage) *errorMessage = L"Failed to write temporary note: " + std::to_wstring(GetLastError());
+    CloseHandle(file);
+    return false;
+  }
+
+  std::string utf8 = EncodeUtf8(text);
+  if (!utf8.empty()) {
+    ok = WriteFile(file, utf8.data(), static_cast<DWORD>(utf8.size()), &written, nullptr);
+    if (!ok) {
+      if (errorMessage) *errorMessage = L"Failed to write temporary note: " + std::to_wstring(GetLastError());
+      CloseHandle(file);
+      return false;
+    }
+  }
+
+  CloseHandle(file);
+  return true;
+}
+
+bool ReadClipboardText(HWND hwnd, std::wstring& text, std::wstring* errorMessage) {
+  text.clear();
+  if (!OpenClipboard(hwnd)) {
+    if (errorMessage) *errorMessage = L"Failed to open clipboard.";
+    return false;
+  }
+
+  HANDLE data = GetClipboardData(CF_UNICODETEXT);
+  if (!data) {
+    if (errorMessage) *errorMessage = L"Clipboard does not contain text.";
+    CloseClipboard();
+    return false;
+  }
+
+  const wchar_t* buffer = static_cast<const wchar_t*>(GlobalLock(data));
+  if (!buffer) {
+    if (errorMessage) *errorMessage = L"Failed to read clipboard text.";
+    CloseClipboard();
+    return false;
+  }
+
+  text = buffer;
+  GlobalUnlock(data);
+  CloseClipboard();
+
+  if (text.empty()) {
+    if (errorMessage) *errorMessage = L"Clipboard text is empty.";
+    return false;
+  }
+  return true;
+}
+
+bool GetFileSnapshot(const std::wstring& path, FILETIME& lastWriteTime, ULONGLONG& size) {
+  WIN32_FILE_ATTRIBUTE_DATA data{};
+  if (!GetFileAttributesExW(path.c_str(), GetFileExInfoStandard, &data)) return false;
+  lastWriteTime = data.ftLastWriteTime;
+  size = (static_cast<ULONGLONG>(data.nFileSizeHigh) << 32) | data.nFileSizeLow;
+  return true;
+}
+
+auto FindNewNoteEditAction(const NotesConfig& config) {
+  auto it = config.actions.find(L"Edit");
+  if (it != config.actions.end() && IsActionTargetCompatible(it->second, reinterpret_cast<const NoteFile*>(1))) {
+    return it;
+  }
+  it = config.actions.find(L"edit");
+  if (it != config.actions.end() && IsActionTargetCompatible(it->second, reinterpret_cast<const NoteFile*>(1))) {
+    return it;
+  }
+  return config.actions.end();
+}
 }
 
 int App::Run(HINSTANCE instance, int showCmd) {
   instance_ = instance;
+  singleInstanceMutex_ = CreateMutexW(nullptr, TRUE, kSingleInstanceMutexName);
+  if (!singleInstanceMutex_) return 0;
+  if (GetLastError() == ERROR_ALREADY_EXISTS) {
+    HWND existing = FindWindowW(kMainClass, nullptr);
+    if (existing) {
+      DWORD processId = 0;
+      GetWindowThreadProcessId(existing, &processId);
+      if (processId != 0) AllowSetForegroundWindow(processId);
+      PostMessageW(existing, kSingleInstanceShowMsg, 0, 0);
+    }
+    CloseHandle(singleInstanceMutex_);
+    singleInstanceMutex_ = nullptr;
+    return 0;
+  }
 
   WNDCLASSEXW wc{};
   wc.cbSize = sizeof(wc);
@@ -196,6 +305,9 @@ LRESULT App::HandleMainMessage(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         ExitFromTray();
       }
       return 0;
+    case kSingleInstanceShowMsg:
+      ShowMainWindow();
+      return 0;
     case WM_CONTEXTMENU:
       if (reinterpret_cast<HWND>(wp) == listBox_) {
         POINT screenPt{ GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
@@ -225,6 +337,10 @@ LRESULT App::HandleMainMessage(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
       ShowToTray();
       return 0;
     case WM_DESTROY:
+      if (singleInstanceMutex_) {
+        CloseHandle(singleInstanceMutex_);
+        singleInstanceMutex_ = nullptr;
+      }
       DestroyFonts();
       PostQuitMessage(0);
       return 0;
@@ -261,12 +377,23 @@ LRESULT App::HandleListBoxMessage(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 }
 
 bool App::LoadConfig() {
-  std::wstring path = GetProgramConfigPath();
+  const std::wstring programPath = GetProgramConfigPath();
+  const std::wstring fallbackPath = GetFallbackConfigPath();
+  std::wstring path = programPath;
   if (GetFileAttributesW(path.c_str()) == INVALID_FILE_ATTRIBUTES) {
-    path = GetFallbackConfigPath();
+    path = fallbackPath;
   }
-  LoadAppConfig(config_, GetProgramConfigPath(), GetFallbackConfigPath());
-  LoadNotesConfig(path, notesConfig_);
+
+  AppConfig loadedAppConfig{};
+  LoadAppConfig(loadedAppConfig, programPath, fallbackPath);
+  config_ = std::move(loadedAppConfig);
+
+  NotesConfig loadedNotesConfig{};
+  if (LoadNotesConfig(path, loadedNotesConfig)) {
+    notesConfig_ = std::move(loadedNotesConfig);
+  } else {
+    notesConfig_ = NotesConfig{};
+  }
   return true;
 }
 
@@ -315,7 +442,7 @@ void App::ShowTrayMenu(POINT pt) {
 
 void App::ShowMainWindow() {
   SetTaskbarVisible(true);
-  ShowWindow(hwnd_, SW_SHOW);
+  ShowWindow(hwnd_, IsIconic(hwnd_) ? SW_RESTORE : SW_SHOW);
   SetForegroundWindow(hwnd_);
 }
 
@@ -383,10 +510,11 @@ void App::LayoutControls() {
   GetClientRect(hwnd_, &rc);
   if (listBox_) {
     MoveWindow(listBox_, 0, 0, rc.right - rc.left, rc.bottom - rc.top, TRUE);
+    RedrawWindow(listBox_, nullptr, nullptr, RDW_ERASE | RDW_INVALIDATE | RDW_UPDATENOW);
   }
 }
 
-void App::RefreshNotes() {
+void App::RefreshNotes(const std::unordered_map<std::wstring, bool>* expandedStateByGroupId) {
   notesByGroup_.clear();
   groupStates_.clear();
   expandedGroups_.clear();
@@ -400,9 +528,26 @@ void App::RefreshNotes() {
     LoadNoteFiles(group, files, &state);
     notesByGroup_.push_back(std::move(files));
     groupStates_.push_back(state);
-    expandedGroups_.push_back(group.expanded);
+    bool expanded = group.expanded;
+    if (expandedStateByGroupId) {
+      if (auto it = expandedStateByGroupId->find(group.id); it != expandedStateByGroupId->end()) {
+        expanded = it->second;
+      }
+    }
+    expandedGroups_.push_back(expanded);
   }
   RebuildVisibleRows();
+}
+
+void App::ReloadConfigAndRefreshNotes() {
+  std::unordered_map<std::wstring, bool> expandedStateByGroupId;
+  const int count = static_cast<int>(std::min(notesConfig_.groups.size(), expandedGroups_.size()));
+  for (int i = 0; i < count; ++i) {
+    expandedStateByGroupId[notesConfig_.groups[i].id] = expandedGroups_[i];
+  }
+
+  LoadConfig();
+  RefreshNotes(&expandedStateByGroupId);
 }
 
 void App::RefreshGroup(int groupIndex) {
@@ -440,7 +585,9 @@ void App::RebuildVisibleRows() {
 }
 
 void App::InvalidateList() {
-  if (listBox_) InvalidateRect(listBox_, nullptr, TRUE);
+  if (listBox_) {
+    RedrawWindow(listBox_, nullptr, nullptr, RDW_ERASE | RDW_INVALIDATE | RDW_UPDATENOW);
+  }
 }
 
 RECT App::GetRowRect(int index) const {
@@ -573,32 +720,94 @@ void App::ToggleGroup(int groupIndex) {
 
 void App::CreateNoteForGroup(int groupIndex) {
   if (groupIndex < 0 || groupIndex >= static_cast<int>(notesConfig_.groups.size())) return;
-  std::wstring createdPath;
-  std::wstring errorMessage;
   const NoteGroupConfig& group = notesConfig_.groups[groupIndex];
-  if (!CreateNoteInGroup(group, createdPath, &errorMessage)) {
+  auto actionIt = FindNewNoteEditAction(notesConfig_);
+  if (actionIt == notesConfig_.actions.end()) {
+    MessageBoxW(hwnd_, L"New notes require file_action.Edit.", L"MyBuddy", MB_OK | MB_ICONERROR);
+    return;
+  }
+
+  std::wstring draftPath;
+  std::wstring errorMessage;
+  if (!CreateTempNoteForGroup(group, draftPath, &errorMessage)) {
     MessageBoxW(hwnd_, errorMessage.c_str(), L"MyBuddy", MB_OK | MB_ICONERROR);
     return;
   }
-  RefreshGroup(groupIndex);
-  if (!group.defaultFileAction.empty()) {
-    NoteFile created{};
-    created.path = createdPath;
-    created.dir = group.path;
-    auto pos = createdPath.find_last_of(L"\\/");
-    created.name = pos == std::wstring::npos ? createdPath : createdPath.substr(pos + 1);
-    created.stem = created.name;
-    auto dot = created.stem.find_last_of(L'.');
-    if (dot != std::wstring::npos) created.stem = created.stem.substr(0, dot);
-    auto actionIt = notesConfig_.actions.find(group.defaultFileAction);
-    if (actionIt != notesConfig_.actions.end()) {
-      std::wstring command;
-      if (!ExecuteAction(actionIt->second, group, &created, &errorMessage, &command)) {
-        std::wstring message = L"Failed to run action:\n" + actionIt->second.title + L"\n\nCommand:\n" + command + L"\n\n" + errorMessage;
-        MessageBoxW(hwnd_, message.c_str(), L"MyBuddy", MB_OK | MB_ICONERROR);
-      }
-    }
+
+  NoteFile draft{};
+  draft.path = draftPath;
+  auto pos = draftPath.find_last_of(L"\\/");
+  draft.dir = pos == std::wstring::npos ? L"" : draftPath.substr(0, pos);
+  draft.name = pos == std::wstring::npos ? draftPath : draftPath.substr(pos + 1);
+  draft.stem = draft.name;
+  auto dot = draft.stem.find_last_of(L'.');
+  if (dot != std::wstring::npos) draft.stem = draft.stem.substr(0, dot);
+
+  FILETIME beforeWrite{};
+  ULONGLONG beforeSize = 0;
+  GetFileSnapshot(draftPath, beforeWrite, beforeSize);
+
+  std::wstring command;
+  if (!ExecuteActionAndWait(actionIt->second, group, &draft, &errorMessage, &command)) {
+    DeleteFileW(draftPath.c_str());
+    std::wstring message = L"Failed to run action:\n" + actionIt->second.title + L"\n\nCommand:\n" + command + L"\n\n" + errorMessage;
+    MessageBoxW(hwnd_, message.c_str(), L"MyBuddy", MB_OK | MB_ICONERROR);
+    return;
   }
+
+  FILETIME afterWrite{};
+  ULONGLONG afterSize = 0;
+  bool existsAfter = GetFileSnapshot(draftPath, afterWrite, afterSize);
+  bool changed = existsAfter &&
+    (CompareFileTime(&afterWrite, &beforeWrite) != 0 || afterSize != beforeSize);
+
+  if (!changed) {
+    if (existsAfter) DeleteFileW(draftPath.c_str());
+    return;
+  }
+
+  std::wstring finalPath;
+  if (!MoveTempNoteIntoGroup(group, draftPath, finalPath, &errorMessage)) {
+    std::wstring message = L"Edited note was not saved into the target group.\n\n" + errorMessage;
+    MessageBoxW(hwnd_, message.c_str(), L"MyBuddy", MB_OK | MB_ICONERROR);
+    return;
+  }
+
+  RefreshGroup(groupIndex);
+}
+
+void App::CreateNoteFromClipboardForGroup(int groupIndex) {
+  if (groupIndex < 0 || groupIndex >= static_cast<int>(notesConfig_.groups.size())) return;
+  const NoteGroupConfig& group = notesConfig_.groups[groupIndex];
+
+  std::wstring clipboardText;
+  std::wstring errorMessage;
+  if (!ReadClipboardText(hwnd_, clipboardText, &errorMessage)) {
+    MessageBoxW(hwnd_, errorMessage.c_str(), L"MyBuddy", MB_OK | MB_ICONERROR);
+    return;
+  }
+
+  std::wstring draftPath;
+  if (!CreateTempNoteForGroup(group, draftPath, &errorMessage)) {
+    MessageBoxW(hwnd_, errorMessage.c_str(), L"MyBuddy", MB_OK | MB_ICONERROR);
+    return;
+  }
+
+  if (!WriteUtf8TextFile(draftPath, clipboardText, &errorMessage)) {
+    DeleteFileW(draftPath.c_str());
+    MessageBoxW(hwnd_, errorMessage.c_str(), L"MyBuddy", MB_OK | MB_ICONERROR);
+    return;
+  }
+
+  std::wstring finalPath;
+  if (!MoveTempNoteIntoGroup(group, draftPath, finalPath, &errorMessage)) {
+    DeleteFileW(draftPath.c_str());
+    std::wstring message = L"Clipboard note was not saved into the target group.\n\n" + errorMessage;
+    MessageBoxW(hwnd_, message.c_str(), L"MyBuddy", MB_OK | MB_ICONERROR);
+    return;
+  }
+
+  RefreshGroup(groupIndex);
 }
 
 void App::OpenFileNote(int groupIndex, int fileIndex) {
@@ -607,6 +816,7 @@ void App::OpenFileNote(int groupIndex, int fileIndex) {
   if (group.defaultFileAction.empty()) return;
   auto actionIt = notesConfig_.actions.find(group.defaultFileAction);
   if (actionIt == notesConfig_.actions.end()) return;
+  if (!IsActionTargetCompatible(actionIt->second, &notesByGroup_[groupIndex][fileIndex])) return;
   std::wstring errorMessage;
   std::wstring command;
   if (!ExecuteAction(actionIt->second, group, &notesByGroup_[groupIndex][fileIndex], &errorMessage, &command)) {
@@ -620,10 +830,12 @@ void App::RunGroupMenu(int groupIndex, POINT screenPt) {
   HMENU menu = CreatePopupMenu();
   if (!menu) return;
   constexpr UINT kMenuNew = 4001;
-  constexpr UINT kMenuRefresh = 4002;
+  constexpr UINT kMenuNewFromClipboard = 4002;
+  constexpr UINT kMenuRefresh = 4003;
   UINT nextActionId = 4100;
 
   AppendMenuW(menu, MF_STRING, kMenuNew, L"New Note");
+  AppendMenuW(menu, MF_STRING, kMenuNewFromClipboard, L"New From Clipboard");
   AppendMenuW(menu, MF_STRING, kMenuRefresh, L"Refresh");
   if (!group.groupActions.empty()) {
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
@@ -633,6 +845,7 @@ void App::RunGroupMenu(int groupIndex, POINT screenPt) {
   for (const std::wstring& actionId : group.groupActions) {
     auto it = notesConfig_.actions.find(actionId);
     if (it == notesConfig_.actions.end()) continue;
+    if (!IsActionTargetCompatible(it->second, nullptr)) continue;
     AppendMenuW(menu, MF_STRING, nextActionId, it->second.title.c_str());
     actionIds[nextActionId] = actionId;
     ++nextActionId;
@@ -645,8 +858,10 @@ void App::RunGroupMenu(int groupIndex, POINT screenPt) {
 
   if (cmd == kMenuNew) {
     CreateNoteForGroup(groupIndex);
+  } else if (cmd == kMenuNewFromClipboard) {
+    CreateNoteFromClipboardForGroup(groupIndex);
   } else if (cmd == kMenuRefresh) {
-    RefreshGroup(groupIndex);
+    ReloadConfigAndRefreshNotes();
   } else if (auto it = actionIds.find(cmd); it != actionIds.end()) {
     std::wstring errorMessage;
     std::wstring command;
@@ -669,6 +884,11 @@ void App::RunFileMenu(int groupIndex, int fileIndex, POINT screenPt) {
   if (!group.defaultFileAction.empty()) {
     auto it = notesConfig_.actions.find(group.defaultFileAction);
     if (it != notesConfig_.actions.end()) {
+      if (!IsActionTargetCompatible(it->second, &file)) {
+        it = notesConfig_.actions.end();
+      }
+    }
+    if (it != notesConfig_.actions.end()) {
       AppendMenuW(menu, MF_STRING, nextActionId, it->second.title.c_str());
       actionIds[nextActionId] = group.defaultFileAction;
       ++nextActionId;
@@ -679,6 +899,7 @@ void App::RunFileMenu(int groupIndex, int fileIndex, POINT screenPt) {
     if (actionId == group.defaultFileAction) continue;
     auto it = notesConfig_.actions.find(actionId);
     if (it == notesConfig_.actions.end()) continue;
+    if (!IsActionTargetCompatible(it->second, &file)) continue;
     AppendMenuW(menu, MF_STRING, nextActionId, it->second.title.c_str());
     actionIds[nextActionId] = actionId;
     ++nextActionId;

@@ -23,10 +23,16 @@ enum class NoteGroupLoadState {
   MissingDirectory,
 };
 
+enum class ActionTarget {
+  File,
+  Directory,
+};
+
 struct ActionConfig {
   std::wstring id;
   std::wstring title;
   std::wstring command;
+  ActionTarget target = ActionTarget::File;
 };
 
 struct NoteGroupConfig {
@@ -35,6 +41,7 @@ struct NoteGroupConfig {
   std::wstring path;
   bool expanded = true;
   std::vector<std::wstring> filePatterns;
+  std::wstring createExtension;
   int maxItems = 5;
   NoteSortBy sortBy = NoteSortBy::ModifiedTime;
   SortOrder sortOrder = SortOrder::Desc;
@@ -45,10 +52,14 @@ struct NoteGroupConfig {
 
 struct NotesConfig {
   std::vector<std::wstring> defaultFilePatterns{L"*.txt", L"*.md"};
+  std::wstring defaultCreateExtension;
   int defaultMaxItems = 5;
   NoteSortBy defaultSortBy = NoteSortBy::ModifiedTime;
   SortOrder defaultSortOrder = SortOrder::Desc;
   bool defaultGroupExpanded = true;
+  std::wstring defaultFileAction;
+  std::vector<std::wstring> defaultFileActions;
+  std::vector<std::wstring> defaultGroupActions;
   std::map<std::wstring, ActionConfig> actions;
   std::vector<NoteGroupConfig> groups;
 };
@@ -78,5 +89,10 @@ struct VisibleRow {
 bool LoadNotesConfig(const std::wstring& path, NotesConfig& config);
 void LoadNoteFiles(const NoteGroupConfig& group, std::vector<NoteFile>& files, NoteGroupLoadState* state = nullptr);
 bool CreateNoteInGroup(const NoteGroupConfig& group, std::wstring& createdPath, std::wstring* errorMessage = nullptr);
+bool CreateTempNoteForGroup(const NoteGroupConfig& group, std::wstring& createdPath, std::wstring* errorMessage = nullptr);
+bool MoveTempNoteIntoGroup(const NoteGroupConfig& group, const std::wstring& sourcePath, std::wstring& finalPath, std::wstring* errorMessage = nullptr);
+bool IsActionTargetCompatible(const ActionConfig& action, const NoteFile* file);
 bool ExecuteAction(const ActionConfig& action, const NoteGroupConfig& group, const NoteFile* file,
+  std::wstring* errorMessage = nullptr, std::wstring* resolvedCommand = nullptr);
+bool ExecuteActionAndWait(const ActionConfig& action, const NoteGroupConfig& group, const NoteFile* file,
   std::wstring* errorMessage = nullptr, std::wstring* resolvedCommand = nullptr);

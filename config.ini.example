@@ -7,10 +7,16 @@
 ; Reserved for compatibility. AppData path is always %AppData%\MyBuddy.
 appName=MyBuddy
 
-[notes]
+[notes_default]
 ; Global file patterns, separated by ';'.
 ; Typical values: *.txt;*.md
 filePatterns=*.txt;*.md
+; Default extension used when creating a new note.
+; Examples: .txt, .md
+; If empty, the first writable extension from filePatterns is used.
+createExtension=.md
+; New notes are first created as temporary drafts, then renamed from content
+; after the editor exits.
 ; Maximum visible items per group.
 ; Integer >= 1. Default: 5
 maxItems=5
@@ -23,8 +29,17 @@ sortOrder=desc
 ; Whether groups start expanded by default.
 ; Allowed values: 0, 1
 defaultGroupExpanded=1
+; Default file action for all groups unless overridden.
+; Must reference a [file_action.*] section.
+defaultFileAction=Edit
+; Default file-item context menu actions unless overridden.
+; Must reference [file_action.*] sections.
+fileActions=Edit;Reveal
+; Default group-header context menu actions unless overridden.
+; Must reference [dir_action.*] sections.
+groupActions=Terminal
 
-[action.edit]
+[file_action.Edit]
 ; Menu text shown to the user.
 title=Edit
 ; Full command line.
@@ -32,12 +47,12 @@ title=Edit
 ; {file} {dir} {name} {stem} {group} {group_title} {group_dir}
 command=notepad.exe "{file}"
 
-[action.reveal]
+[file_action.Reveal]
 title=Open Folder
 command=explorer.exe /select,"{file}"
 
-[action.terminal]
-title=Open Terminal
+[dir_action.Terminal]
+; If omitted, the action id "Terminal" is used as the title.
 command=wt.exe -d "{group_dir}"
 
 [note_group.inbox]
@@ -50,6 +65,9 @@ path=C:\Users\USERNAME\Documents\Notes\Inbox
 ; expanded=1
 ; Optional per-group override for file patterns.
 ; filePatterns=*.txt;*.md
+; Optional per-group override for new-note extension.
+; Examples: .txt, .md
+; createExtension=.txt
 ; Optional per-group override for max visible items.
 ; maxItems=5
 ; Optional per-group override for sort field.
@@ -59,20 +77,25 @@ path=C:\Users\USERNAME\Documents\Notes\Inbox
 ; Allowed values: asc, desc
 ; sortOrder=desc
 ; Action id used when clicking a file item or after creating a new file.
-defaultFileAction=edit
+; Must reference a [file_action.*] section.
+; defaultFileAction=Edit
 ; Additional file-item context menu actions, separated by ';'.
-fileActions=edit;reveal
+; Must reference [file_action.*] sections.
+; fileActions=Edit;reveal
 ; Group-header context menu actions, separated by ';'.
-groupActions=terminal
+; Must reference [dir_action.*] sections.
+; groupActions=terminal
 
 [note_group.work]
+; If omitted, the group id "work" is used as the title.
 title=Work
 path=C:\Users\USERNAME\Documents\Notes\Work
 ; This group only shows markdown files.
 filePatterns=*.md
+createExtension=.md
 maxItems=8
 sortBy=name
 sortOrder=asc
-defaultFileAction=edit
-fileActions=edit;reveal
+defaultFileAction=Edit
+fileActions=Edit;reveal
 groupActions=terminal

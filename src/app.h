@@ -47,7 +47,7 @@ private:
   void CreateFonts();
   void DestroyFonts();
   void LayoutControls();
-  void RefreshNotes();
+  void RefreshNotes(const std::unordered_map<std::wstring, bool>* expandedStateByGroupId = nullptr);
   void RebuildVisibleRows();
   void InvalidateList();
   void DrawListItem(const DRAWITEMSTRUCT* dis);
@@ -59,9 +59,11 @@ private:
   RECT GetGroupAddRect(const RECT& rowRect) const;
   void ToggleGroup(int groupIndex);
   void CreateNoteForGroup(int groupIndex);
+  void CreateNoteFromClipboardForGroup(int groupIndex);
   void OpenFileNote(int groupIndex, int fileIndex);
   void RunGroupMenu(int groupIndex, POINT screenPt);
   void RunFileMenu(int groupIndex, int fileIndex, POINT screenPt);
+  void ReloadConfigAndRefreshNotes();
   void RefreshGroup(int groupIndex);
 
   std::wstring GetAppDataDir() const;
@@ -70,6 +72,7 @@ private:
   std::wstring GetStatePath() const;
 
   HINSTANCE instance_ = nullptr;
+  HANDLE singleInstanceMutex_ = nullptr;
   HWND hwnd_ = nullptr;
   HWND listBox_ = nullptr;
   WNDPROC originalListBoxProc_ = nullptr;
