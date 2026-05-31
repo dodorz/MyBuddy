@@ -11,9 +11,23 @@ This document defines the `config.ini` format for the notes feature.
 - The add button belongs to the group header.
 - File actions and group actions are both defined in config.
 
+## App Section
+
+Section name: `[app]`
+
+Supported keys:
+
+- `globalHotKey`
+  - Global hotkey used to show the window
+  - Default: `Ctrl+Alt+B`
+  - Simple supported forms: `Ctrl+Alt+B`, `Ctrl+Shift+1`, `Alt+F6`
+
 ## Example
 
 ```ini
+[app]
+globalHotKey=Ctrl+Alt+B
+
 [notes_default]
 filePatterns=*.txt;*.md
 createExtension=.md

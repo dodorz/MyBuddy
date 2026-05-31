@@ -2,7 +2,6 @@
 
 #include "resource.h"
 #include "state.h"
-#include "version.h"
 
 #include <shellapi.h>
 #include <shlobj.h>
@@ -13,6 +12,9 @@
 namespace {
 constexpr UINT kTrayMsg = WM_APP + 1;
 constexpr UINT kSingleInstanceShowMsg = WM_APP + 2;
+constexpr int kGlobalHotKeyId = 0xB001;
+constexpr UINT kAutoHideTimerId = 5001;
+constexpr UINT kAnimationTimerId = 5002;
 constexpr UINT kTrayIconId = 1001;
 constexpr UINT kTrayOpenCmd = 2001;
 constexpr UINT kTrayExitCmd = 2002;
@@ -22,11 +24,110 @@ constexpr int kFileIndent = 28;
 constexpr int kGroupAddWidth = 32;
 constexpr int kGroupClipboardWidth = 32;
 constexpr wchar_t kMainClass[] = L"MyBuddyMainClass";
+constexpr wchar_t kHotZoneClass[] = L"MyBuddyHotZoneClass";
 constexpr wchar_t kSingleInstanceMutexName[] = L"Local\\MyBuddy.SingleInstance";
+constexpr int kSnapThresholdPx = 28;
+constexpr int kHotZoneThicknessPx = 2;
+constexpr int kAutoHideDelayMs = 420;
+constexpr int kAutoHidePollMs = 80;
+constexpr int kExpandDurationMs = 210;
+constexpr int kCollapseDurationMs = 300;
+constexpr int kAnimationTickMs = 16;
 
 std::wstring EnsureTrailingSlash(std::wstring path) {
   if (!path.empty() && path.back() != L'\\') path.push_back(L'\\');
   return path;
+}
+
+std::wstring ReadIniString(const std::wstring& path, const wchar_t* section, const wchar_t* key, const wchar_t* def = L"") {
+  wchar_t buffer[512];
+  GetPrivateProfileStringW(section, key, def, buffer, static_cast<DWORD>(std::size(buffer)), path.c_str());
+  return buffer;
+}
+
+std::wstring Trim(std::wstring value) {
+  size_t start = 0;
+  while (start < value.size() && iswspace(value[start])) ++start;
+  size_t end = value.size();
+  while (end > start && iswspace(value[end - 1])) --end;
+  return value.substr(start, end - start);
+}
+
+std::wstring ToUpper(std::wstring value) {
+  std::transform(value.begin(), value.end(), value.begin(), towupper);
+  return value;
+}
+
+std::vector<std::wstring> SplitHotKeySpec(const std::wstring& spec) {
+  std::vector<std::wstring> parts;
+  std::wstring current;
+  for (wchar_t ch : spec) {
+    if (ch == L'+') {
+      std::wstring token = Trim(current);
+      if (!token.empty()) parts.push_back(token);
+      current.clear();
+      continue;
+    }
+    current.push_back(ch);
+  }
+  std::wstring token = Trim(current);
+  if (!token.empty()) parts.push_back(token);
+  return parts;
+}
+
+bool TryParseFunctionKey(const std::wstring& token, UINT& vk) {
+  if (token.size() < 2 || token[0] != L'F') return false;
+  int value = 0;
+  for (size_t i = 1; i < token.size(); ++i) {
+    if (!iswdigit(token[i])) return false;
+    value = value * 10 + (token[i] - L'0');
+  }
+  if (value < 1 || value > 24) return false;
+  vk = VK_F1 + (value - 1);
+  return true;
+}
+
+bool ParseHotKeySpec(const std::wstring& spec, UINT& modifiers, UINT& vk) {
+  modifiers = 0;
+  vk = 0;
+  std::vector<std::wstring> parts = SplitHotKeySpec(spec);
+  if (parts.empty()) return false;
+
+  for (const std::wstring& rawPart : parts) {
+    const std::wstring part = ToUpper(rawPart);
+    if (part == L"CTRL" || part == L"CONTROL") {
+      modifiers |= MOD_CONTROL;
+      continue;
+    }
+    if (part == L"ALT") {
+      modifiers |= MOD_ALT;
+      continue;
+    }
+    if (part == L"SHIFT") {
+      modifiers |= MOD_SHIFT;
+      continue;
+    }
+    if (part == L"WIN" || part == L"WINDOWS" || part == L"META") {
+      modifiers |= MOD_WIN;
+      continue;
+    }
+
+    UINT parsedVk = 0;
+    if (part.size() == 1) {
+      wchar_t ch = part[0];
+      if ((ch >= L'A' && ch <= L'Z') || (ch >= L'0' && ch <= L'9')) {
+        parsedVk = static_cast<UINT>(ch);
+      }
+    } else if (TryParseFunctionKey(part, parsedVk)) {
+    } else if (part == L"SPACE") {
+      parsedVk = VK_SPACE;
+    }
+
+    if (parsedVk == 0 || vk != 0) return false;
+    vk = parsedVk;
+  }
+
+  return modifiers != 0 && vk != 0;
 }
 
 void AddTrayIcon(HWND hwnd) {
@@ -218,6 +319,16 @@ int App::Run(HINSTANCE instance, int showCmd) {
   wc.cbWndExtra = sizeof(LONG_PTR);
   RegisterClassExW(&wc);
 
+  WNDCLASSEXW hotZoneClass{};
+  hotZoneClass.cbSize = sizeof(hotZoneClass);
+  hotZoneClass.lpfnWndProc = App::HotZoneWndProc;
+  hotZoneClass.hInstance = instance_;
+  hotZoneClass.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+  hotZoneClass.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
+  hotZoneClass.lpszClassName = kHotZoneClass;
+  hotZoneClass.cbWndExtra = sizeof(LONG_PTR);
+  RegisterClassExW(&hotZoneClass);
+
   const std::wstring title = L"MyBuddy";
 
   hwnd_ = CreateWindowExW(
@@ -262,6 +373,17 @@ LRESULT CALLBACK App::MainWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
   return self ? self->HandleMainMessage(hwnd, msg, wp, lp) : DefWindowProcW(hwnd, msg, wp, lp);
 }
 
+LRESULT CALLBACK App::HotZoneWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+  App* self = reinterpret_cast<App*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+  if (msg == WM_NCCREATE) {
+    auto* cs = reinterpret_cast<CREATESTRUCTW*>(lp);
+    self = reinterpret_cast<App*>(cs->lpCreateParams);
+    SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(self));
+    self->hotZone_ = hwnd;
+  }
+  return self ? self->HandleHotZoneMessage(hwnd, msg, wp, lp) : DefWindowProcW(hwnd, msg, wp, lp);
+}
+
 LRESULT CALLBACK App::ListBoxProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
   App* self = reinterpret_cast<App*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
   return self ? self->HandleListBoxMessage(hwnd, msg, wp, lp) : DefWindowProcW(hwnd, msg, wp, lp);
@@ -275,14 +397,21 @@ LRESULT App::HandleMainMessage(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
       if (!stateLoaded_) {
         InitializeDefaultState();
       }
+      RegisterHotKey(hwnd_, kGlobalHotKeyId, hotKeyModifiers_, hotKeyVk_);
+      CreateHotZoneWindow();
       CreateFonts();
       CreateControls();
       ApplySavedGeometry();
       RefreshNotes();
+      lastPointerInsideTick_ = GetTickCount64();
+      SetTimer(hwnd_, kAutoHideTimerId, kAutoHidePollMs, nullptr);
       return 0;
     }
     case WM_SIZE:
       LayoutControls();
+      return 0;
+    case WM_ENTERSIZEMOVE:
+      inMoveSize_ = true;
       return 0;
     case WM_MEASUREITEM:
       if (wp == 1) {
@@ -299,13 +428,41 @@ LRESULT App::HandleMainMessage(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
       return FALSE;
     case WM_COMMAND:
       if (LOWORD(wp) == kTrayOpenCmd) {
-        ShowMainWindow();
+        if (IsDocked()) {
+          RequestExpand(true);
+        } else {
+          ShowMainWindow(true);
+        }
       } else if (LOWORD(wp) == kTrayExitCmd) {
         ExitFromTray();
       }
       return 0;
     case kSingleInstanceShowMsg:
-      ShowMainWindow();
+      if (IsDocked()) {
+        RequestExpand(true);
+      } else {
+        ShowMainWindow(true);
+      }
+      return 0;
+    case WM_HOTKEY:
+      if (wp == kGlobalHotKeyId) {
+        if (IsDocked()) {
+          RequestExpand(true);
+        } else {
+          ShowMainWindow(true);
+        }
+        return 0;
+      }
+      break;
+    case WM_TIMER:
+      if (wp == kAnimationTimerId) {
+        TickAnimation();
+        return 0;
+      }
+      if (wp == kAutoHideTimerId) {
+        PollAutoHide();
+        return 0;
+      }
       return 0;
     case WM_CONTEXTMENU:
       if (reinterpret_cast<HWND>(wp) == listBox_) {
@@ -321,21 +478,31 @@ LRESULT App::HandleMainMessage(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         return 0;
       }
       break;
-    case WM_MOVE:
     case WM_EXITSIZEMOVE: {
+      inMoveSize_ = false;
+      if (animation_.active || suppressWindowTracking_) return 0;
       RECT r{};
       GetWindowRect(hwnd_, &r);
-      state_.x = r.left;
-      state_.y = r.top;
-      state_.w = r.right - r.left;
-      state_.h = r.bottom - r.top;
-      SaveState();
+      CommitVisibleRect(r, true);
+      SyncHotZone();
+      return 0;
+    }
+    case WM_MOVE: {
+      if (animation_.active || suppressWindowTracking_ || inMoveSize_ || !state_.expanded || trayHidden_) return 0;
+      RECT r{};
+      GetWindowRect(hwnd_, &r);
+      CommitVisibleRect(r, false);
+      SyncHotZone();
       return 0;
     }
     case WM_CLOSE:
       ShowToTray();
       return 0;
     case WM_DESTROY:
+      KillTimer(hwnd_, kAnimationTimerId);
+      KillTimer(hwnd_, kAutoHideTimerId);
+      UnregisterHotKey(hwnd_, kGlobalHotKeyId);
+      DestroyHotZoneWindow();
       if (singleInstanceMutex_) {
         CloseHandle(singleInstanceMutex_);
         singleInstanceMutex_ = nullptr;
@@ -346,7 +513,11 @@ LRESULT App::HandleMainMessage(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     default:
       if (msg == kTrayMsg) {
         if (LOWORD(lp) == WM_LBUTTONUP || LOWORD(lp) == WM_LBUTTONDBLCLK) {
-          ShowMainWindow();
+          if (IsDocked()) {
+            RequestExpand(true);
+          } else {
+            ShowMainWindow(true);
+          }
         } else if (LOWORD(lp) == WM_RBUTTONUP) {
           POINT pt{};
           GetCursorPos(&pt);
@@ -355,6 +526,19 @@ LRESULT App::HandleMainMessage(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         return 0;
       }
       break;
+  }
+  return DefWindowProcW(hwnd, msg, wp, lp);
+}
+
+LRESULT App::HandleHotZoneMessage(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+  switch (msg) {
+    case WM_MOUSEMOVE:
+    case WM_LBUTTONDOWN:
+    case WM_LBUTTONUP:
+      RequestExpand(msg != WM_MOUSEMOVE);
+      return 0;
+    case WM_NCHITTEST:
+      return HTCLIENT;
   }
   return DefWindowProcW(hwnd, msg, wp, lp);
 }
@@ -383,6 +567,13 @@ bool App::LoadConfig() {
     path = fallbackPath;
   }
 
+  hotKeySpec_ = ReadIniString(path, L"app", L"globalHotKey", L"Ctrl+Alt+B");
+  if (!ParseHotKeySpec(hotKeySpec_, hotKeyModifiers_, hotKeyVk_)) {
+    hotKeySpec_ = L"Ctrl+Alt+B";
+    hotKeyModifiers_ = MOD_CONTROL | MOD_ALT;
+    hotKeyVk_ = 'B';
+  }
+
   NotesConfig loadedNotesConfig{};
   if (LoadNotesConfig(path, loadedNotesConfig)) {
     notesConfig_ = std::move(loadedNotesConfig);
@@ -401,11 +592,14 @@ void App::SaveState() const {
 }
 
 void App::InitializeDefaultState() {
-  state_.version = 3;
-  state_.x = 120;
-  state_.y = 120;
+  state_.version = 4;
+  state_.dockEdge = static_cast<int>(DockEdge::Right);
+  RECT work = GetWorkArea();
   state_.w = 420;
   state_.h = 640;
+  state_.x = work.right - state_.w;
+  state_.y = work.top + 80;
+  state_.expanded = true;
   state_.taskbarVisible = true;
 }
 
@@ -420,7 +614,12 @@ void App::SetTaskbarVisible(bool visible) {
 }
 
 void App::ShowToTray() {
+  trayHidden_ = true;
+  state_.expanded = true;
+  animation_.active = false;
+  KillTimer(hwnd_, kAnimationTimerId);
   SetTaskbarVisible(false);
+  SyncHotZone();
   HideMainWindow();
   SaveState();
 }
@@ -435,18 +634,338 @@ void App::ShowTrayMenu(POINT pt) {
   ShowTrayContextMenu(hwnd_, pt);
 }
 
-void App::ShowMainWindow() {
+void App::ShowMainWindow(bool activate) {
+  trayHidden_ = false;
   SetTaskbarVisible(true);
-  ShowWindow(hwnd_, IsIconic(hwnd_) ? SW_RESTORE : SW_SHOW);
-  SetForegroundWindow(hwnd_);
+  ShowWindow(hwnd_, IsIconic(hwnd_) ? SW_RESTORE : (activate ? SW_SHOW : SW_SHOWNOACTIVATE));
+  if (activate) {
+    SetForegroundWindow(hwnd_);
+  }
 }
 
 void App::HideMainWindow() {
   ShowWindow(hwnd_, SW_HIDE);
 }
 
+void App::CreateHotZoneWindow() {
+  if (hotZone_) return;
+  hotZone_ = CreateWindowExW(
+    WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_LAYERED | WS_EX_NOACTIVATE,
+    kHotZoneClass,
+    L"",
+    WS_POPUP,
+    0, 0, 1, 1,
+    nullptr,
+    nullptr,
+    instance_,
+    this);
+  if (hotZone_) {
+    SetLayeredWindowAttributes(hotZone_, 0, 1, LWA_ALPHA);
+  }
+}
+
+void App::DestroyHotZoneWindow() {
+  if (hotZone_) {
+    DestroyWindow(hotZone_);
+    hotZone_ = nullptr;
+  }
+}
+
+RECT App::GetWorkArea() const {
+  const HMONITOR monitor = MonitorFromWindow(hwnd_ ? hwnd_ : GetDesktopWindow(), MONITOR_DEFAULTTONEAREST);
+  MONITORINFO info{ sizeof(info) };
+  GetMonitorInfoW(monitor, &info);
+  return info.rcWork;
+}
+
+bool App::IsDocked() const {
+  return state_.dockEdge == static_cast<int>(DockEdge::Left) ||
+    state_.dockEdge == static_cast<int>(DockEdge::Right) ||
+    state_.dockEdge == static_cast<int>(DockEdge::Top);
+}
+
+void App::UpdateDockEdgeFromRect(RECT& rect) {
+  RECT work = GetWorkArea();
+  const int width = rect.right - rect.left;
+  const int height = rect.bottom - rect.top;
+  const int leftDist = std::abs(rect.left - work.left);
+  const int rightDist = std::abs(work.right - rect.right);
+  const int topDist = std::abs(rect.top - work.top);
+  const int best = std::min({leftDist, rightDist, topDist});
+
+  DockEdge edge = DockEdge::None;
+  if (best <= kSnapThresholdPx) {
+    if (best == leftDist) edge = DockEdge::Left;
+    else if (best == rightDist) edge = DockEdge::Right;
+    else edge = DockEdge::Top;
+  }
+
+  state_.dockEdge = static_cast<int>(edge);
+  if (edge == DockEdge::Left) {
+    rect.left = work.left;
+    rect.right = rect.left + width;
+    rect.top = std::max(work.top, std::min(rect.top, work.bottom - height));
+    rect.bottom = rect.top + height;
+  } else if (edge == DockEdge::Right) {
+    rect.left = work.right - width;
+    rect.right = work.right;
+    rect.top = std::max(work.top, std::min(rect.top, work.bottom - height));
+    rect.bottom = rect.top + height;
+  } else if (edge == DockEdge::Top) {
+    rect.top = work.top;
+    rect.bottom = rect.top + height;
+    rect.left = std::max(work.left, std::min(rect.left, work.right - width));
+    rect.right = rect.left + width;
+  } else {
+    rect.left = std::max(work.left, std::min(rect.left, work.right - width));
+    rect.top = std::max(work.top, std::min(rect.top, work.bottom - height));
+    rect.right = rect.left + width;
+    rect.bottom = rect.top + height;
+  }
+}
+
+RECT App::GetExpandedRect() const {
+  RECT work = GetWorkArea();
+  RECT rect{ state_.x, state_.y, state_.x + std::max(300, state_.w), state_.y + std::max(280, state_.h) };
+  const int width = rect.right - rect.left;
+  const int height = rect.bottom - rect.top;
+  const DockEdge edge = static_cast<DockEdge>(state_.dockEdge);
+
+  if (edge == DockEdge::Left) {
+    rect.left = work.left;
+    rect.right = rect.left + width;
+    rect.top = std::max(work.top, std::min(rect.top, work.bottom - height));
+    rect.bottom = rect.top + height;
+  } else if (edge == DockEdge::Right) {
+    rect.left = work.right - width;
+    rect.right = work.right;
+    rect.top = std::max(work.top, std::min(rect.top, work.bottom - height));
+    rect.bottom = rect.top + height;
+  } else if (edge == DockEdge::Top) {
+    rect.top = work.top;
+    rect.bottom = rect.top + height;
+    rect.left = std::max(work.left, std::min(rect.left, work.right - width));
+    rect.right = rect.left + width;
+  } else {
+    rect.left = std::max(work.left, std::min(rect.left, work.right - width));
+    rect.top = std::max(work.top, std::min(rect.top, work.bottom - height));
+    rect.right = rect.left + width;
+    rect.bottom = rect.top + height;
+  }
+  return rect;
+}
+
+RECT App::GetCollapsedRect() const {
+  RECT rect = GetExpandedRect();
+  const int width = rect.right - rect.left;
+  const int height = rect.bottom - rect.top;
+  switch (static_cast<DockEdge>(state_.dockEdge)) {
+    case DockEdge::Left:
+      rect.left -= width;
+      rect.right = rect.left + width;
+      break;
+    case DockEdge::Right:
+      rect.left += width;
+      rect.right = rect.left + width;
+      break;
+    case DockEdge::Top:
+      rect.top -= height;
+      rect.bottom = rect.top + height;
+      break;
+    case DockEdge::None:
+    default:
+      break;
+  }
+  return rect;
+}
+
+RECT App::GetHotZoneRect() const {
+  RECT work = GetWorkArea();
+  switch (static_cast<DockEdge>(state_.dockEdge)) {
+    case DockEdge::Left:
+      return RECT{ work.left, work.top, work.left + kHotZoneThicknessPx, work.bottom };
+    case DockEdge::Right:
+      return RECT{ work.right - kHotZoneThicknessPx, work.top, work.right, work.bottom };
+    case DockEdge::Top:
+      return RECT{ work.left, work.top, work.right, work.top + kHotZoneThicknessPx };
+    case DockEdge::None:
+    default:
+      return RECT{ 0, 0, 0, 0 };
+  }
+}
+
+void App::SyncHotZone() {
+  if (!hotZone_) return;
+  const bool show = IsDocked() && !trayHidden_ && !state_.expanded && !animation_.active;
+  hotZoneVisible_ = show;
+  if (!show) {
+    ShowWindow(hotZone_, SW_HIDE);
+    return;
+  }
+
+  RECT rect = GetHotZoneRect();
+  SetWindowPos(hotZone_, HWND_TOPMOST,
+    rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top,
+    SWP_SHOWWINDOW | SWP_NOACTIVATE);
+}
+
+void App::CommitVisibleRect(const RECT& rect, bool detectDock) {
+  RECT normalized = rect;
+  if (detectDock) {
+    UpdateDockEdgeFromRect(normalized);
+  } else if (IsDocked()) {
+    RECT copy = normalized;
+    UpdateDockEdgeFromRect(copy);
+    normalized = copy;
+  }
+
+  state_.x = normalized.left;
+  state_.y = normalized.top;
+  state_.w = normalized.right - normalized.left;
+  state_.h = normalized.bottom - normalized.top;
+  SaveState();
+}
+
+void App::RequestExpand(bool activate) {
+  if (animation_.active && animation_.expand) {
+    if (activate) animation_.activateOnFinish = true;
+    return;
+  }
+
+  trayHidden_ = false;
+  if (!IsDocked()) {
+    state_.expanded = true;
+    ShowMainWindow(activate);
+    SyncHotZone();
+    SaveState();
+    return;
+  }
+
+  if (state_.expanded && IsWindowVisible(hwnd_)) {
+    ShowMainWindow(activate);
+    return;
+  }
+
+  RECT collapsedRect = GetCollapsedRect();
+  suppressWindowTracking_ = true;
+  SetWindowPos(hwnd_, HWND_TOPMOST, collapsedRect.left, collapsedRect.top,
+    collapsedRect.right - collapsedRect.left, collapsedRect.bottom - collapsedRect.top,
+    SWP_NOACTIVATE | SWP_SHOWWINDOW);
+  suppressWindowTracking_ = false;
+  ShowMainWindow(false);
+  BeginAnimation(true, activate);
+}
+
+void App::RequestCollapse() {
+  if (!IsDocked() || trayHidden_ || !state_.expanded || animation_.active) return;
+  BeginAnimation(false, false);
+}
+
+void App::BeginAnimation(bool expand, bool activateOnFinish) {
+  if (animation_.active && animation_.expand == expand) {
+    if (activateOnFinish) animation_.activateOnFinish = true;
+    return;
+  }
+  KillTimer(hwnd_, kAnimationTimerId);
+  animation_.active = true;
+  animation_.expand = expand;
+  animation_.activateOnFinish = activateOnFinish;
+  GetWindowRect(hwnd_, &animation_.from);
+  animation_.to = expand ? GetExpandedRect() : GetCollapsedRect();
+  animation_.startTick = GetTickCount64();
+  animation_.durationMs = expand ? kExpandDurationMs : kCollapseDurationMs;
+  suppressWindowTracking_ = true;
+  SetTimer(hwnd_, kAnimationTimerId, kAnimationTickMs, nullptr);
+}
+
+void App::TickAnimation() {
+  if (!animation_.active) {
+    KillTimer(hwnd_, kAnimationTimerId);
+    return;
+  }
+
+  const ULONGLONG now = GetTickCount64();
+  const double t = std::clamp(static_cast<double>(now - animation_.startTick) / std::max(1, animation_.durationMs), 0.0, 1.0);
+  const double eased = 1.0 - (1.0 - t) * (1.0 - t);
+  auto lerp = [eased](int a, int b) {
+    return static_cast<int>(a + (b - a) * eased);
+  };
+
+  RECT rect{};
+  rect.left = lerp(animation_.from.left, animation_.to.left);
+  rect.top = lerp(animation_.from.top, animation_.to.top);
+  rect.right = lerp(animation_.from.right, animation_.to.right);
+  rect.bottom = lerp(animation_.from.bottom, animation_.to.bottom);
+
+  SetWindowPos(hwnd_, HWND_TOPMOST, rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top,
+    SWP_NOACTIVATE | SWP_NOZORDER);
+
+  if (t >= 1.0) {
+    FinishAnimation();
+  }
+}
+
+void App::FinishAnimation() {
+  KillTimer(hwnd_, kAnimationTimerId);
+  animation_.active = false;
+  suppressWindowTracking_ = false;
+
+  if (animation_.expand) {
+    state_.expanded = true;
+    CommitVisibleRect(animation_.to, false);
+    SetTaskbarVisible(true);
+    ShowMainWindow(animation_.activateOnFinish);
+    if (animation_.activateOnFinish) {
+      SetForegroundWindow(hwnd_);
+    }
+    lastPointerInsideTick_ = GetTickCount64();
+  } else {
+    state_.expanded = false;
+    SetTaskbarVisible(false);
+    SaveState();
+  }
+  SyncHotZone();
+}
+
+bool App::IsPointerInsideRect(const RECT& rect) const {
+  POINT pt{};
+  GetCursorPos(&pt);
+  return PtInRect(&rect, pt) != FALSE;
+}
+
+void App::PollAutoHide() {
+  if (trayHidden_ || inMoveSize_ || animation_.active || !state_.expanded || !IsDocked() || !IsWindowVisible(hwnd_)) {
+    return;
+  }
+
+  RECT mainRect{};
+  GetWindowRect(hwnd_, &mainRect);
+  const ULONGLONG now = GetTickCount64();
+  if (IsPointerInsideRect(mainRect)) {
+    lastPointerInsideTick_ = now;
+    return;
+  }
+
+  if (now - lastPointerInsideTick_ >= kAutoHideDelayMs) {
+    RequestCollapse();
+  }
+}
+
 void App::ApplySavedGeometry() {
-  SetWindowPos(hwnd_, HWND_TOPMOST, state_.x, state_.y, state_.w, state_.h, SWP_NOACTIVATE);
+  state_.version = 4;
+  if (state_.w <= 0) state_.w = 420;
+  if (state_.h <= 0) state_.h = 640;
+  RECT rect = GetExpandedRect();
+  CommitVisibleRect(rect, true);
+  RECT target = state_.expanded && !trayHidden_ ? GetExpandedRect() : GetCollapsedRect();
+  suppressWindowTracking_ = true;
+  SetWindowPos(hwnd_, HWND_TOPMOST, target.left, target.top, target.right - target.left, target.bottom - target.top,
+    SWP_NOACTIVATE | SWP_SHOWWINDOW);
+  suppressWindowTracking_ = false;
+  if (!state_.expanded) {
+    SetTaskbarVisible(false);
+  }
+  SyncHotZone();
 }
 
 void App::CreateControls() {

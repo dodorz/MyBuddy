@@ -3,6 +3,12 @@
 ; 1. config.ini beside MyBuddy.exe
 ; 2. %AppData%\MyBuddy\config.ini
 
+[app]
+; Global hotkey used to show the window.
+; Simple supported forms: Ctrl+Alt+B, Ctrl+Shift+1, Alt+F6
+; Default: Ctrl+Alt+B
+globalHotKey=Ctrl+Alt+B
+
 [notes_default]
 ; Global file patterns, separated by ';'.
 ; Typical values: *.txt;*.md

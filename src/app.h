@@ -9,11 +9,13 @@
 #include <vector>
 
 struct AppState {
-  int version = 3;
+  int version = 4;
+  int dockEdge = 0;
   int x = 120;
   int y = 120;
   int w = 420;
   int h = 640;
+  bool expanded = true;
   bool taskbarVisible = true;
 };
 
@@ -22,9 +24,28 @@ public:
   int Run(HINSTANCE instance, int showCmd);
 
 private:
+  enum class DockEdge {
+    None = 0,
+    Left = 1,
+    Right = 2,
+    Top = 3,
+  };
+
+  struct Animation {
+    bool active = false;
+    bool expand = false;
+    bool activateOnFinish = false;
+    RECT from{};
+    RECT to{};
+    ULONGLONG startTick = 0;
+    int durationMs = 0;
+  };
+
   static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
+  static LRESULT CALLBACK HotZoneWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
   static LRESULT CALLBACK ListBoxProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
   LRESULT HandleMainMessage(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
+  LRESULT HandleHotZoneMessage(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
   LRESULT HandleListBoxMessage(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
 
   bool LoadConfig();
@@ -34,10 +55,27 @@ private:
   void ShowToTray();
   void ExitFromTray();
   void ShowTrayMenu(POINT pt);
-  void ShowMainWindow();
+  void ShowMainWindow(bool activate = true);
   void HideMainWindow();
   void ApplySavedGeometry();
   void SetTaskbarVisible(bool visible);
+  void CreateHotZoneWindow();
+  void DestroyHotZoneWindow();
+  RECT GetWorkArea() const;
+  RECT GetExpandedRect() const;
+  RECT GetCollapsedRect() const;
+  RECT GetHotZoneRect() const;
+  void UpdateDockEdgeFromRect(RECT& rect);
+  void SyncHotZone();
+  void RequestExpand(bool activate);
+  void RequestCollapse();
+  void BeginAnimation(bool expand, bool activateOnFinish);
+  void TickAnimation();
+  void FinishAnimation();
+  void CommitVisibleRect(const RECT& rect, bool detectDock);
+  bool IsDocked() const;
+  bool IsPointerInsideRect(const RECT& rect) const;
+  void PollAutoHide();
 
   void CreateControls();
   void CreateFonts();
@@ -71,6 +109,7 @@ private:
   HINSTANCE instance_ = nullptr;
   HANDLE singleInstanceMutex_ = nullptr;
   HWND hwnd_ = nullptr;
+  HWND hotZone_ = nullptr;
   HWND listBox_ = nullptr;
   WNDPROC originalListBoxProc_ = nullptr;
   HFONT fontBody_ = nullptr;
@@ -84,5 +123,14 @@ private:
   std::vector<bool> expandedGroups_{};
   std::vector<VisibleRow> visibleRows_{};
   std::wstring globalStatusMessage_{};
+  std::wstring hotKeySpec_ = L"Ctrl+Alt+B";
+  UINT hotKeyModifiers_ = MOD_CONTROL | MOD_ALT;
+  UINT hotKeyVk_ = 'B';
+  Animation animation_{};
+  ULONGLONG lastPointerInsideTick_ = 0;
+  bool suppressWindowTracking_ = false;
+  bool inMoveSize_ = false;
+  bool trayHidden_ = false;
+  bool hotZoneVisible_ = false;
   bool stateLoaded_ = false;
 };
