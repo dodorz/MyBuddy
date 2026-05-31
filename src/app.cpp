@@ -1,6 +1,5 @@
 #include "app.h"
 
-#include "config.h"
 #include "resource.h"
 #include "state.h"
 #include "version.h"
@@ -21,6 +20,7 @@ constexpr int kListRowHeight = 30;
 constexpr int kGroupIndent = 14;
 constexpr int kFileIndent = 28;
 constexpr int kGroupAddWidth = 32;
+constexpr int kGroupClipboardWidth = 32;
 constexpr wchar_t kMainClass[] = L"MyBuddyMainClass";
 constexpr wchar_t kSingleInstanceMutexName[] = L"Local\\MyBuddy.SingleInstance";
 
@@ -218,8 +218,7 @@ int App::Run(HINSTANCE instance, int showCmd) {
   wc.cbWndExtra = sizeof(LONG_PTR);
   RegisterClassExW(&wc);
 
-  std::wstring title = L"MyBuddy ";
-  title += MYBUDDY_VERSION_STRING;
+  const std::wstring title = L"MyBuddy";
 
   hwnd_ = CreateWindowExW(
     WS_EX_APPWINDOW | WS_EX_TOPMOST,
@@ -383,10 +382,6 @@ bool App::LoadConfig() {
   if (GetFileAttributesW(path.c_str()) == INVALID_FILE_ATTRIBUTES) {
     path = fallbackPath;
   }
-
-  AppConfig loadedAppConfig{};
-  LoadAppConfig(loadedAppConfig, programPath, fallbackPath);
-  config_ = std::move(loadedAppConfig);
 
   NotesConfig loadedNotesConfig{};
   if (LoadNotesConfig(path, loadedNotesConfig)) {
@@ -601,7 +596,16 @@ RECT App::GetGroupToggleRect(const RECT& rowRect) const {
 }
 
 RECT App::GetGroupAddRect(const RECT& rowRect) const {
-  return RECT{ rowRect.right - kGroupAddWidth - 8, rowRect.top + 4, rowRect.right - 8, rowRect.bottom - 4 };
+  return RECT{
+    rowRect.right - kGroupClipboardWidth - kGroupAddWidth - 12,
+    rowRect.top + 4,
+    rowRect.right - kGroupClipboardWidth - 12,
+    rowRect.bottom - 4
+  };
+}
+
+RECT App::GetGroupClipboardRect(const RECT& rowRect) const {
+  return RECT{ rowRect.right - kGroupClipboardWidth - 8, rowRect.top + 4, rowRect.right - 8, rowRect.bottom - 4 };
 }
 
 void App::DrawListItem(const DRAWITEMSTRUCT* dis) {
@@ -629,6 +633,7 @@ void App::DrawListItem(const DRAWITEMSTRUCT* dis) {
     const NoteGroupConfig& group = notesConfig_.groups[row.groupIndex];
     RECT toggleRc = GetGroupToggleRect(rc);
     RECT addRc = GetGroupAddRect(rc);
+    RECT clipboardRc = GetGroupClipboardRect(rc);
     RECT textRc = rc;
     textRc.left += kGroupIndent + 14;
     textRc.right = addRc.left - 8;
@@ -640,6 +645,7 @@ void App::DrawListItem(const DRAWITEMSTRUCT* dis) {
     SelectObject(dc, fontMeta_);
     SetTextColor(dc, RGB(64, 98, 160));
     DrawTextW(dc, L"+", -1, &addRc, DT_SINGLELINE | DT_VCENTER | DT_CENTER);
+    DrawTextW(dc, L"P", -1, &clipboardRc, DT_SINGLELINE | DT_VCENTER | DT_CENTER);
   } else if (row.type == VisibleRow::Type::GroupMessage) {
     RECT textRc = rc;
     textRc.left += kFileIndent;
@@ -650,6 +656,7 @@ void App::DrawListItem(const DRAWITEMSTRUCT* dis) {
     DrawTextW(dc, message.c_str(), -1, &textRc, DT_SINGLELINE | DT_VCENTER | DT_LEFT | DT_END_ELLIPSIS);
   } else {
     const NoteFile& file = notesByGroup_[row.groupIndex][row.fileIndex];
+    const NoteGroupConfig& group = notesConfig_.groups[row.groupIndex];
     RECT nameRc = rc;
     nameRc.left += kFileIndent;
     nameRc.right -= 110;
@@ -658,7 +665,8 @@ void App::DrawListItem(const DRAWITEMSTRUCT* dis) {
     timeRc.right -= 8;
 
     SelectObject(dc, fontBody_);
-    DrawTextW(dc, file.name.c_str(), -1, &nameRc, DT_SINGLELINE | DT_VCENTER | DT_LEFT | DT_END_ELLIPSIS);
+    const std::wstring& displayName = group.showExtensions ? file.name : file.stem;
+    DrawTextW(dc, displayName.c_str(), -1, &nameRc, DT_SINGLELINE | DT_VCENTER | DT_LEFT | DT_END_ELLIPSIS);
     std::wstring timeText = FormatFileTime(file.modifiedTime);
     SelectObject(dc, fontMeta_);
     SetTextColor(dc, RGB(96, 104, 116));
@@ -684,9 +692,12 @@ void App::HandleListLeftClick(POINT pt) {
   RECT rowRect = GetRowRect(index);
   if (row.type == VisibleRow::Type::Group) {
     RECT addRc = GetGroupAddRect(rowRect);
+    RECT clipboardRc = GetGroupClipboardRect(rowRect);
     RECT toggleRc = GetGroupToggleRect(rowRect);
     if (PtInRect(&addRc, pt)) {
       CreateNoteForGroup(row.groupIndex);
+    } else if (PtInRect(&clipboardRc, pt)) {
+      CreateNoteFromClipboardForGroup(row.groupIndex);
     } else if (PtInRect(&toggleRc, pt) || PtInRect(&rowRect, pt)) {
       ToggleGroup(row.groupIndex);
     }

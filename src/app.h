@@ -8,10 +8,6 @@
 #include <unordered_map>
 #include <vector>
 
-struct AppConfig {
-  std::wstring appName = L"MyBuddy";
-};
-
 struct AppState {
   int version = 3;
   int x = 120;
@@ -57,6 +53,7 @@ private:
   RECT GetRowRect(int index) const;
   RECT GetGroupToggleRect(const RECT& rowRect) const;
   RECT GetGroupAddRect(const RECT& rowRect) const;
+  RECT GetGroupClipboardRect(const RECT& rowRect) const;
   void ToggleGroup(int groupIndex);
   void CreateNoteForGroup(int groupIndex);
   void CreateNoteFromClipboardForGroup(int groupIndex);
@@ -80,7 +77,6 @@ private:
   HFONT fontGroup_ = nullptr;
   HFONT fontMeta_ = nullptr;
   HFONT fontSymbol_ = nullptr;
-  AppConfig config_{};
   AppState state_{};
   NotesConfig notesConfig_{};
   std::vector<std::vector<NoteFile>> notesByGroup_{};

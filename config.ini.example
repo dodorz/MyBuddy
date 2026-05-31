@@ -3,10 +3,6 @@
 ; 1. config.ini beside MyBuddy.exe
 ; 2. %AppData%\MyBuddy\config.ini
 
-[meta]
-; Reserved for compatibility. AppData path is always %AppData%\MyBuddy.
-appName=MyBuddy
-
 [notes_default]
 ; Global file patterns, separated by ';'.
 ; Typical values: *.txt;*.md
@@ -29,6 +25,9 @@ sortOrder=desc
 ; Whether groups start expanded by default.
 ; Allowed values: 0, 1
 defaultGroupExpanded=1
+; Whether list items show file extensions by default.
+; Allowed values: 0, 1. Default: 0
+showExtensions=0
 ; Default file action for all groups unless overridden.
 ; Must reference a [file_action.*] section.
 defaultFileAction=Edit
@@ -63,6 +62,9 @@ title=Inbox
 path=C:\Users\USERNAME\Documents\Notes\Inbox
 ; Optional per-group override. Allowed values: 0, 1
 ; expanded=1
+; Optional per-group override for whether list items show file extensions.
+; Allowed values: 0, 1
+; showExtensions=0
 ; Optional per-group override for file patterns.
 ; filePatterns=*.txt;*.md
 ; Optional per-group override for new-note extension.
@@ -96,6 +98,7 @@ createExtension=.md
 maxItems=8
 sortBy=name
 sortOrder=asc
+showExtensions=0
 defaultFileAction=Edit
 fileActions=Edit;reveal
 groupActions=terminal

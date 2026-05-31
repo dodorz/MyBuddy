@@ -8,7 +8,6 @@ add_executable(MyBuddy WIN32
   src/main.cpp
   src/app.cpp
   src/MyBuddy.rc
-  src/config.cpp
   src/notes.cpp
   src/state.cpp
   src/window.cpp

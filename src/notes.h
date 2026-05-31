@@ -40,6 +40,7 @@ struct NoteGroupConfig {
   std::wstring title;
   std::wstring path;
   bool expanded = true;
+  bool showExtensions = false;
   std::vector<std::wstring> filePatterns;
   std::wstring createExtension;
   int maxItems = 5;
@@ -57,6 +58,7 @@ struct NotesConfig {
   NoteSortBy defaultSortBy = NoteSortBy::ModifiedTime;
   SortOrder defaultSortOrder = SortOrder::Desc;
   bool defaultGroupExpanded = true;
+  bool defaultShowExtensions = false;
   std::wstring defaultFileAction;
   std::vector<std::wstring> defaultFileActions;
   std::vector<std::wstring> defaultGroupActions;

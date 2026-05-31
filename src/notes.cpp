@@ -409,6 +409,7 @@ bool LoadNotesConfig(const std::wstring& path, NotesConfig& config) {
   config.defaultSortBy = ParseSortBy(ReadString(path, L"notes_default", L"sortBy", L"mtime"), NoteSortBy::ModifiedTime);
   config.defaultSortOrder = ParseSortOrder(ReadString(path, L"notes_default", L"sortOrder", L"desc"), SortOrder::Desc);
   config.defaultGroupExpanded = ReadBool(path, L"notes_default", L"defaultGroupExpanded", true);
+  config.defaultShowExtensions = ReadBool(path, L"notes_default", L"showExtensions", false);
   config.defaultFileAction = ReadString(path, L"notes_default", L"defaultFileAction");
   config.defaultFileActions = SplitList(ReadString(path, L"notes_default", L"fileActions"));
   config.defaultGroupActions = SplitList(ReadString(path, L"notes_default", L"groupActions"));
@@ -443,6 +444,7 @@ bool LoadNotesConfig(const std::wstring& path, NotesConfig& config) {
       group.path = ReadString(path, section.c_str(), L"path");
       if (!group.id.empty() && !group.title.empty() && !group.path.empty()) {
         group.expanded = ReadBool(path, section.c_str(), L"expanded", config.defaultGroupExpanded);
+        group.showExtensions = ReadBool(path, section.c_str(), L"showExtensions", config.defaultShowExtensions);
         group.filePatterns = SplitList(ReadString(path, section.c_str(), L"filePatterns"));
         if (group.filePatterns.empty()) group.filePatterns = config.defaultFilePatterns;
         group.createExtension = NormalizeExtension(ReadString(path, section.c_str(), L"createExtension", config.defaultCreateExtension.c_str()));

@@ -21,6 +21,7 @@ maxItems=5
 sortBy=mtime
 sortOrder=desc
 defaultGroupExpanded=1
+showExtensions=0
 defaultFileAction=Edit
 fileActions=Edit;reveal
 groupActions=terminal
@@ -46,6 +47,7 @@ createExtension=.md
 maxItems=8
 sortBy=name
 sortOrder=asc
+showExtensions=0
 defaultFileAction=Edit
 fileActions=Edit;reveal
 groupActions=terminal
@@ -84,6 +86,10 @@ Supported keys:
 - `defaultGroupExpanded`
   - `1` or `0`
   - Default: `1`
+- `showExtensions`
+  - Whether note list items show filename extensions by default
+  - Supported: `1`, `0`
+  - Default: `0`
 - `defaultFileAction`
   - Default file-item action inherited by groups
   - Must reference a `file_action`
@@ -138,6 +144,9 @@ Optional keys:
 - `expanded`
   - `1` or `0`
   - If missing, inherits `defaultGroupExpanded`
+- `showExtensions`
+  - `1` or `0`
+  - If missing, inherits default `showExtensions`
 - `filePatterns`
   - If missing, inherits default `filePatterns`
 - `createExtension`
