@@ -46,6 +46,7 @@ std::wstring GetFileStem(const std::wstring& name) {
 }
 
 NoteSortBy ParseSortBy(const std::wstring& value, NoteSortBy fallback) {
+  if (value == L"line") return NoteSortBy::LineOrder;
   if (value == L"name") return NoteSortBy::Name;
   if (value == L"ctime") return NoteSortBy::CreatedTime;
   if (value == L"mtime") return NoteSortBy::ModifiedTime;
@@ -64,10 +65,33 @@ ActionTarget ParseActionTarget(const std::wstring& value, ActionTarget fallback)
   return fallback;
 }
 
+NoteGroupType ParseGroupType(const std::wstring& value, NoteGroupType fallback) {
+  if (value == L"dir" || value == L"directory") return NoteGroupType::Directory;
+  if (value == L"text") return NoteGroupType::TextLines;
+  return fallback;
+}
+
+NoteSortBy NormalizeSortByForGroupType(NoteGroupType type, NoteSortBy value, NoteSortBy fallback) {
+  if (type == NoteGroupType::Directory && value == NoteSortBy::LineOrder) {
+    return fallback;
+  }
+  return value;
+}
+
 std::wstring JoinPath(const std::wstring& dir, const std::wstring& file) {
   if (dir.empty()) return file;
   if (dir.back() == L'\\') return dir + file;
   return dir + L'\\' + file;
+}
+
+std::wstring GetParentDir(const std::wstring& path) {
+  auto pos = path.find_last_of(L"\\/");
+  if (pos == std::wstring::npos) return L"";
+  return path.substr(0, pos);
+}
+
+std::wstring GetGroupDirectory(const NoteGroupConfig& group) {
+  return group.type == NoteGroupType::Directory ? group.path : GetParentDir(group.path);
 }
 
 std::wstring EnsureTrailingSlash(std::wstring path) {
@@ -86,19 +110,24 @@ std::wstring ReplaceAll(std::wstring input, const std::wstring& token, const std
 
 std::wstring BuildCommand(const ActionConfig& action, const NoteGroupConfig& group, const NoteFile* file) {
   std::wstring command = action.command;
+  const std::wstring groupDir = GetGroupDirectory(group);
   command = ReplaceAll(command, L"{group}", group.id);
   command = ReplaceAll(command, L"{group_title}", group.title);
-  command = ReplaceAll(command, L"{group_dir}", group.path);
+  command = ReplaceAll(command, L"{group_dir}", groupDir);
   if (file) {
     command = ReplaceAll(command, L"{file}", file->path);
     command = ReplaceAll(command, L"{dir}", file->dir);
     command = ReplaceAll(command, L"{name}", file->name);
     command = ReplaceAll(command, L"{stem}", file->stem);
+    command = ReplaceAll(command, L"{line}", file->itemText);
+    command = ReplaceAll(command, L"{line_number}", std::to_wstring(file->lineNumber));
   } else {
     command = ReplaceAll(command, L"{file}", L"");
-    command = ReplaceAll(command, L"{dir}", group.path);
+    command = ReplaceAll(command, L"{dir}", groupDir);
     command = ReplaceAll(command, L"{name}", L"");
     command = ReplaceAll(command, L"{stem}", L"");
+    command = ReplaceAll(command, L"{line}", L"");
+    command = ReplaceAll(command, L"{line_number}", L"0");
   }
   return command;
 }
@@ -110,6 +139,11 @@ bool MatchesExtensionPattern(const std::wstring& pattern) {
 std::wstring NormalizeExtension(std::wstring value) {
   if (value.empty()) return value;
   if (value[0] != L'.') value.insert(value.begin(), L'.');
+  return value;
+}
+
+int NormalizeMaxItems(int value, int fallback) {
+  if (value < 0) return fallback;
   return value;
 }
 
@@ -229,6 +263,10 @@ std::vector<std::wstring> SplitLines(const std::wstring& text) {
   }
   lines.push_back(current);
   return lines;
+}
+
+bool GroupSupportsNewNotes(const NoteGroupConfig& group) {
+  return group.type == NoteGroupType::Directory;
 }
 
 std::wstring TryParseTomlTitle(const std::vector<std::wstring>& lines, size_t& contentStartLine) {
@@ -359,7 +397,7 @@ bool StartActionProcess(const ActionConfig& action, const NoteGroupConfig& group
     return false;
   }
 
-  const std::wstring workingDirectory = file ? file->dir : group.path;
+  const std::wstring workingDirectory = file ? file->dir : GetGroupDirectory(group);
   SHELLEXECUTEINFOW sei{};
   sei.cbSize = sizeof(sei);
   sei.fMask = SEE_MASK_FLAG_NO_UI | SEE_MASK_NOCLOSEPROCESS;
@@ -400,19 +438,69 @@ bool LoadNotesConfig(const std::wstring& path, NotesConfig& config) {
   }
 
   config = NotesConfig{};
-  config.defaultFilePatterns = SplitList(ReadString(path, L"notes_default", L"filePatterns", L"*.txt;*.md"));
-  if (config.defaultFilePatterns.empty()) {
-    config.defaultFilePatterns = {L"*.txt", L"*.md"};
-  }
-  config.defaultCreateExtension = NormalizeExtension(ReadString(path, L"notes_default", L"createExtension"));
-  config.defaultMaxItems = std::max(1, ReadInt(path, L"notes_default", L"maxItems", 5));
-  config.defaultSortBy = ParseSortBy(ReadString(path, L"notes_default", L"sortBy", L"mtime"), NoteSortBy::ModifiedTime);
-  config.defaultSortOrder = ParseSortOrder(ReadString(path, L"notes_default", L"sortOrder", L"desc"), SortOrder::Desc);
   config.defaultGroupExpanded = ReadBool(path, L"notes_default", L"defaultGroupExpanded", true);
-  config.defaultShowExtensions = ReadBool(path, L"notes_default", L"showExtensions", false);
-  config.defaultFileAction = ReadString(path, L"notes_default", L"defaultFileAction");
-  config.defaultFileActions = SplitList(ReadString(path, L"notes_default", L"fileActions"));
-  config.defaultGroupActions = SplitList(ReadString(path, L"notes_default", L"groupActions"));
+
+  config.sharedDefaults.filePatterns = SplitList(ReadString(path, L"notes_default", L"filePatterns", L"*.txt;*.md"));
+  if (config.sharedDefaults.filePatterns.empty()) {
+    config.sharedDefaults.filePatterns = {L"*.txt", L"*.md"};
+  }
+  config.sharedDefaults.createExtension = NormalizeExtension(ReadString(path, L"notes_default", L"createExtension"));
+  config.sharedDefaults.maxItems = NormalizeMaxItems(ReadInt(path, L"notes_default", L"maxItems", 5), 5);
+  config.sharedDefaults.showExtensions = ReadBool(path, L"notes_default", L"showExtensions", false);
+  config.sharedDefaults.defaultFileAction = ReadString(path, L"notes_default", L"defaultFileAction");
+  config.sharedDefaults.fileActions = SplitList(ReadString(path, L"notes_default", L"fileActions"));
+  config.sharedDefaults.groupActions = SplitList(ReadString(path, L"notes_default", L"groupActions"));
+
+  config.dirDefaults = config.sharedDefaults;
+  config.dirDefaults.sortBy = NormalizeSortByForGroupType(NoteGroupType::Directory,
+    ParseSortBy(ReadString(path, L"notes_default", L"sortBy", L"mtime"), NoteSortBy::ModifiedTime),
+    NoteSortBy::ModifiedTime);
+  config.dirDefaults.sortOrder = ParseSortOrder(ReadString(path, L"notes_default", L"sortOrder", L"desc"), SortOrder::Desc);
+  config.dirDefaults.filePatterns = SplitList(ReadString(path, L"notes_dir_default", L"filePatterns"));
+  if (config.dirDefaults.filePatterns.empty()) {
+    config.dirDefaults.filePatterns = config.sharedDefaults.filePatterns;
+  }
+  config.dirDefaults.createExtension = NormalizeExtension(ReadString(path, L"notes_dir_default", L"createExtension",
+    config.dirDefaults.createExtension.c_str()));
+  config.dirDefaults.maxItems = NormalizeMaxItems(
+    ReadInt(path, L"notes_dir_default", L"maxItems", config.dirDefaults.maxItems), config.dirDefaults.maxItems);
+  config.dirDefaults.sortBy = NormalizeSortByForGroupType(NoteGroupType::Directory,
+    ParseSortBy(ReadString(path, L"notes_dir_default", L"sortBy"), config.dirDefaults.sortBy),
+    config.dirDefaults.sortBy);
+  config.dirDefaults.sortOrder = ParseSortOrder(ReadString(path, L"notes_dir_default", L"sortOrder"), config.dirDefaults.sortOrder);
+  config.dirDefaults.showExtensions = ReadBool(path, L"notes_dir_default", L"showExtensions", config.dirDefaults.showExtensions);
+  config.dirDefaults.defaultFileAction = ReadString(path, L"notes_dir_default", L"defaultFileAction",
+    config.dirDefaults.defaultFileAction.c_str());
+  {
+    std::vector<std::wstring> actions = SplitList(ReadString(path, L"notes_dir_default", L"fileActions"));
+    if (!actions.empty()) config.dirDefaults.fileActions = std::move(actions);
+  }
+  {
+    std::vector<std::wstring> actions = SplitList(ReadString(path, L"notes_dir_default", L"groupActions"));
+    if (!actions.empty()) config.dirDefaults.groupActions = std::move(actions);
+  }
+
+  config.textDefaults = config.sharedDefaults;
+  config.textDefaults.sortBy = NoteSortBy::LineOrder;
+  config.textDefaults.sortOrder = SortOrder::Asc;
+  config.textDefaults.filePatterns.clear();
+  config.textDefaults.createExtension = NormalizeExtension(ReadString(path, L"notes_text_default", L"createExtension",
+    config.textDefaults.createExtension.c_str()));
+  config.textDefaults.maxItems = NormalizeMaxItems(
+    ReadInt(path, L"notes_text_default", L"maxItems", config.textDefaults.maxItems), config.textDefaults.maxItems);
+  config.textDefaults.sortBy = ParseSortBy(ReadString(path, L"notes_text_default", L"sortBy"), config.textDefaults.sortBy);
+  config.textDefaults.sortOrder = ParseSortOrder(ReadString(path, L"notes_text_default", L"sortOrder"), config.textDefaults.sortOrder);
+  config.textDefaults.showExtensions = ReadBool(path, L"notes_text_default", L"showExtensions", config.textDefaults.showExtensions);
+  config.textDefaults.defaultFileAction = ReadString(path, L"notes_text_default", L"defaultFileAction",
+    config.textDefaults.defaultFileAction.c_str());
+  {
+    std::vector<std::wstring> actions = SplitList(ReadString(path, L"notes_text_default", L"fileActions"));
+    if (!actions.empty()) config.textDefaults.fileActions = std::move(actions);
+  }
+  {
+    std::vector<std::wstring> actions = SplitList(ReadString(path, L"notes_text_default", L"groupActions"));
+    if (!actions.empty()) config.textDefaults.groupActions = std::move(actions);
+  }
 
   std::vector<wchar_t> sections(65536);
   DWORD len = GetPrivateProfileSectionNamesW(sections.data(), static_cast<DWORD>(sections.size()), path.c_str());
@@ -442,20 +530,24 @@ bool LoadNotesConfig(const std::wstring& path, NotesConfig& config) {
       group.title = ReadString(path, section.c_str(), L"title");
       if (group.title.empty()) group.title = group.id;
       group.path = ReadString(path, section.c_str(), L"path");
+      group.type = ParseGroupType(ReadString(path, section.c_str(), L"type", L"dir"), NoteGroupType::Directory);
       if (!group.id.empty() && !group.title.empty() && !group.path.empty()) {
+        const NoteGroupDefaults& defaults =
+          group.type == NoteGroupType::Directory ? config.dirDefaults : config.textDefaults;
         group.expanded = ReadBool(path, section.c_str(), L"expanded", config.defaultGroupExpanded);
-        group.showExtensions = ReadBool(path, section.c_str(), L"showExtensions", config.defaultShowExtensions);
+        group.showExtensions = ReadBool(path, section.c_str(), L"showExtensions", defaults.showExtensions);
         group.filePatterns = SplitList(ReadString(path, section.c_str(), L"filePatterns"));
-        if (group.filePatterns.empty()) group.filePatterns = config.defaultFilePatterns;
-        group.createExtension = NormalizeExtension(ReadString(path, section.c_str(), L"createExtension", config.defaultCreateExtension.c_str()));
-        group.maxItems = std::max(1, ReadInt(path, section.c_str(), L"maxItems", config.defaultMaxItems));
-        group.sortBy = ParseSortBy(ReadString(path, section.c_str(), L"sortBy"), config.defaultSortBy);
-        group.sortOrder = ParseSortOrder(ReadString(path, section.c_str(), L"sortOrder"), config.defaultSortOrder);
-        group.defaultFileAction = ReadString(path, section.c_str(), L"defaultFileAction", config.defaultFileAction.c_str());
+        if (group.filePatterns.empty()) group.filePatterns = defaults.filePatterns;
+        group.createExtension = NormalizeExtension(ReadString(path, section.c_str(), L"createExtension", defaults.createExtension.c_str()));
+        group.maxItems = NormalizeMaxItems(ReadInt(path, section.c_str(), L"maxItems", defaults.maxItems), defaults.maxItems);
+        std::wstring rawSortBy = ReadString(path, section.c_str(), L"sortBy");
+        group.sortBy = NormalizeSortByForGroupType(group.type, ParseSortBy(rawSortBy, defaults.sortBy), defaults.sortBy);
+        group.sortOrder = ParseSortOrder(ReadString(path, section.c_str(), L"sortOrder"), defaults.sortOrder);
+        group.defaultFileAction = ReadString(path, section.c_str(), L"defaultFileAction", defaults.defaultFileAction.c_str());
         group.fileActions = SplitList(ReadString(path, section.c_str(), L"fileActions"));
-        if (group.fileActions.empty()) group.fileActions = config.defaultFileActions;
+        if (group.fileActions.empty()) group.fileActions = defaults.fileActions;
         group.groupActions = SplitList(ReadString(path, section.c_str(), L"groupActions"));
-        if (group.groupActions.empty()) group.groupActions = config.defaultGroupActions;
+        if (group.groupActions.empty()) group.groupActions = defaults.groupActions;
         config.groups.push_back(group);
       }
     }
@@ -471,35 +563,73 @@ void LoadNoteFiles(const NoteGroupConfig& group, std::vector<NoteFile>& files, N
   std::set<std::wstring> seen;
 
   DWORD attr = GetFileAttributesW(group.path.c_str());
-  if (attr == INVALID_FILE_ATTRIBUTES || (attr & FILE_ATTRIBUTE_DIRECTORY) == 0) {
-    if (state) *state = NoteGroupLoadState::MissingDirectory;
-    return;
-  }
+  if (group.type == NoteGroupType::Directory) {
+    if (attr == INVALID_FILE_ATTRIBUTES || (attr & FILE_ATTRIBUTE_DIRECTORY) == 0) {
+      if (state) *state = NoteGroupLoadState::MissingPath;
+      return;
+    }
 
-  for (const std::wstring& pattern : group.filePatterns) {
-    WIN32_FIND_DATAW ffd{};
-    HANDLE h = FindFirstFileW(JoinPath(group.path, pattern).c_str(), &ffd);
-    if (h == INVALID_HANDLE_VALUE) continue;
-    do {
-      if (ffd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
-      std::wstring fullPath = JoinPath(group.path, ffd.cFileName);
-      if (!seen.insert(fullPath).second) continue;
+    for (const std::wstring& pattern : group.filePatterns) {
+      WIN32_FIND_DATAW ffd{};
+      HANDLE h = FindFirstFileW(JoinPath(group.path, pattern).c_str(), &ffd);
+      if (h == INVALID_HANDLE_VALUE) continue;
+      do {
+        if (ffd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
+        std::wstring fullPath = JoinPath(group.path, ffd.cFileName);
+        if (!seen.insert(fullPath).second) continue;
+
+        NoteFile file{};
+        file.path = fullPath;
+        file.dir = group.path;
+        file.name = ffd.cFileName;
+        file.stem = GetFileStem(file.name);
+        file.displayName = file.name;
+        file.itemText = file.stem;
+        file.createdTime = ffd.ftCreationTime;
+        file.modifiedTime = ffd.ftLastWriteTime;
+        files.push_back(file);
+      } while (FindNextFileW(h, &ffd));
+      FindClose(h);
+    }
+  } else {
+    if (attr == INVALID_FILE_ATTRIBUTES || (attr & FILE_ATTRIBUTE_DIRECTORY) != 0) {
+      if (state) *state = NoteGroupLoadState::MissingPath;
+      return;
+    }
+
+    WIN32_FILE_ATTRIBUTE_DATA data{};
+    if (!GetFileAttributesExW(group.path.c_str(), GetFileExInfoStandard, &data)) {
+      if (state) *state = NoteGroupLoadState::MissingPath;
+      return;
+    }
+
+    std::vector<std::wstring> lines = SplitLines(ReadTextFile(group.path));
+    const std::wstring sourceName = group.path.substr(group.path.find_last_of(L"\\/") + 1);
+    const std::wstring sourceStem = GetFileStem(sourceName);
+    const std::wstring sourceDir = GetParentDir(group.path);
+    for (size_t i = 0; i < lines.size(); ++i) {
+      std::wstring text = Trim(lines[i]);
+      if (text.empty()) continue;
 
       NoteFile file{};
-      file.path = fullPath;
-      file.dir = group.path;
-      file.name = ffd.cFileName;
-      file.stem = GetFileStem(file.name);
-      file.createdTime = ffd.ftCreationTime;
-      file.modifiedTime = ffd.ftLastWriteTime;
+      file.path = group.path;
+      file.dir = sourceDir;
+      file.name = sourceName;
+      file.stem = sourceStem;
+      file.displayName = text;
+      file.itemText = text;
+      file.lineNumber = static_cast<int>(i + 1);
+      file.createdTime = data.ftCreationTime;
+      file.modifiedTime = data.ftLastWriteTime;
       files.push_back(file);
-    } while (FindNextFileW(h, &ffd));
-    FindClose(h);
+    }
   }
 
   auto compare = [&](const NoteFile& a, const NoteFile& b) {
     int order = 0;
-    if (group.sortBy == NoteSortBy::Name) {
+    if (group.sortBy == NoteSortBy::LineOrder) {
+      order = a.lineNumber - b.lineNumber;
+    } else if (group.sortBy == NoteSortBy::Name) {
       order = _wcsicmp(a.name.c_str(), b.name.c_str());
       if (order == 0) {
         order = CompareFileTime(&b.modifiedTime, &a.modifiedTime);
@@ -522,7 +652,7 @@ void LoadNoteFiles(const NoteGroupConfig& group, std::vector<NoteFile>& files, N
   };
 
   std::sort(files.begin(), files.end(), compare);
-  if (static_cast<int>(files.size()) > group.maxItems) {
+  if (group.maxItems > 0 && static_cast<int>(files.size()) > group.maxItems) {
     files.resize(group.maxItems);
   }
   if (files.empty() && state) {
@@ -531,6 +661,10 @@ void LoadNoteFiles(const NoteGroupConfig& group, std::vector<NoteFile>& files, N
 }
 
 bool CreateNoteInGroup(const NoteGroupConfig& group, std::wstring& createdPath, std::wstring* errorMessage) {
+  if (group.type != NoteGroupType::Directory) {
+    if (errorMessage) *errorMessage = L"Only directory groups support creating new notes.";
+    return false;
+  }
   SYSTEMTIME st{};
   GetLocalTime(&st);
 
@@ -579,6 +713,10 @@ bool CreateNoteInGroup(const NoteGroupConfig& group, std::wstring& createdPath, 
 }
 
 bool CreateTempNoteForGroup(const NoteGroupConfig& group, std::wstring& createdPath, std::wstring* errorMessage) {
+  if (group.type != NoteGroupType::Directory) {
+    if (errorMessage) *errorMessage = L"Only directory groups support creating new notes.";
+    return false;
+  }
   wchar_t tempPath[MAX_PATH];
   DWORD len = GetTempPathW(MAX_PATH, tempPath);
   if (len == 0 || len >= MAX_PATH) {
@@ -610,6 +748,10 @@ bool CreateTempNoteForGroup(const NoteGroupConfig& group, std::wstring& createdP
 }
 
 bool MoveTempNoteIntoGroup(const NoteGroupConfig& group, const std::wstring& sourcePath, std::wstring& finalPath, std::wstring* errorMessage) {
+  if (group.type != NoteGroupType::Directory) {
+    if (errorMessage) *errorMessage = L"Only directory groups support creating new notes.";
+    return false;
+  }
   DWORD attr = GetFileAttributesW(group.path.c_str());
   if (attr == INVALID_FILE_ATTRIBUTES || (attr & FILE_ATTRIBUTE_DIRECTORY) == 0) {
     if (errorMessage) *errorMessage = L"Group directory does not exist: " + group.path;

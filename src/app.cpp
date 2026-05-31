@@ -186,10 +186,14 @@ std::wstring FormatFileTime(const FILETIME& ft) {
 
 std::wstring GetGroupStatusMessage(NoteGroupLoadState state, const NoteGroupConfig& group) {
   switch (state) {
-    case NoteGroupLoadState::MissingDirectory:
-      return L"Directory not found: " + group.path;
+    case NoteGroupLoadState::MissingPath:
+      return group.type == NoteGroupType::Directory
+        ? L"Directory not found: " + group.path
+        : L"File not found: " + group.path;
     case NoteGroupLoadState::Empty:
-      return L"No matching notes in this group.";
+      return group.type == NoteGroupType::Directory
+        ? L"No matching notes in this group."
+        : L"No non-empty lines in this group file.";
     case NoteGroupLoadState::Ok:
     default:
       return L"";
@@ -1150,21 +1154,24 @@ void App::DrawListItem(const DRAWITEMSTRUCT* dis) {
     DrawTextW(dc, globalStatusMessage_.c_str(), -1, &textRc, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
   } else if (row.type == VisibleRow::Type::Group) {
     const NoteGroupConfig& group = notesConfig_.groups[row.groupIndex];
+    const bool supportsNewNotes = group.type == NoteGroupType::Directory;
     RECT toggleRc = GetGroupToggleRect(rc);
     RECT addRc = GetGroupAddRect(rc);
     RECT clipboardRc = GetGroupClipboardRect(rc);
     RECT textRc = rc;
     textRc.left += kGroupIndent + 14;
-    textRc.right = addRc.left - 8;
+    textRc.right = supportsNewNotes ? addRc.left - 8 : rc.right - 8;
 
     SelectObject(dc, fontSymbol_);
     DrawTextW(dc, expandedGroups_[row.groupIndex] ? L"v" : L">", -1, &toggleRc, DT_SINGLELINE | DT_VCENTER | DT_CENTER);
     SelectObject(dc, fontGroup_);
     DrawTextW(dc, group.title.c_str(), -1, &textRc, DT_SINGLELINE | DT_VCENTER | DT_LEFT);
-    SelectObject(dc, fontMeta_);
-    SetTextColor(dc, RGB(64, 98, 160));
-    DrawTextW(dc, L"+", -1, &addRc, DT_SINGLELINE | DT_VCENTER | DT_CENTER);
-    DrawTextW(dc, L"P", -1, &clipboardRc, DT_SINGLELINE | DT_VCENTER | DT_CENTER);
+    if (supportsNewNotes) {
+      SelectObject(dc, fontMeta_);
+      SetTextColor(dc, RGB(64, 98, 160));
+      DrawTextW(dc, L"+", -1, &addRc, DT_SINGLELINE | DT_VCENTER | DT_CENTER);
+      DrawTextW(dc, L"P", -1, &clipboardRc, DT_SINGLELINE | DT_VCENTER | DT_CENTER);
+    }
   } else if (row.type == VisibleRow::Type::GroupMessage) {
     RECT textRc = rc;
     textRc.left += kFileIndent;
@@ -1184,12 +1191,21 @@ void App::DrawListItem(const DRAWITEMSTRUCT* dis) {
     timeRc.right -= 8;
 
     SelectObject(dc, fontBody_);
-    const std::wstring& displayName = group.showExtensions ? file.name : file.stem;
+    const std::wstring& displayName = file.displayName.empty()
+      ? (group.showExtensions ? file.name : file.stem)
+      : file.displayName;
     DrawTextW(dc, displayName.c_str(), -1, &nameRc, DT_SINGLELINE | DT_VCENTER | DT_LEFT | DT_END_ELLIPSIS);
-    std::wstring timeText = FormatFileTime(file.modifiedTime);
-    SelectObject(dc, fontMeta_);
-    SetTextColor(dc, RGB(96, 104, 116));
-    DrawTextW(dc, timeText.c_str(), -1, &timeRc, DT_SINGLELINE | DT_VCENTER | DT_RIGHT);
+    if (group.type == NoteGroupType::TextLines) {
+      std::wstring lineText = L"#" + std::to_wstring(file.lineNumber);
+      SelectObject(dc, fontMeta_);
+      SetTextColor(dc, RGB(96, 104, 116));
+      DrawTextW(dc, lineText.c_str(), -1, &timeRc, DT_SINGLELINE | DT_VCENTER | DT_RIGHT);
+    } else {
+      std::wstring timeText = FormatFileTime(file.modifiedTime);
+      SelectObject(dc, fontMeta_);
+      SetTextColor(dc, RGB(96, 104, 116));
+      DrawTextW(dc, timeText.c_str(), -1, &timeRc, DT_SINGLELINE | DT_VCENTER | DT_RIGHT);
+    }
   }
 
   SelectObject(dc, oldFont);
@@ -1210,12 +1226,14 @@ void App::HandleListLeftClick(POINT pt) {
   const VisibleRow& row = visibleRows_[index];
   RECT rowRect = GetRowRect(index);
   if (row.type == VisibleRow::Type::Group) {
+    const NoteGroupConfig& group = notesConfig_.groups[row.groupIndex];
+    const bool supportsNewNotes = group.type == NoteGroupType::Directory;
     RECT addRc = GetGroupAddRect(rowRect);
     RECT clipboardRc = GetGroupClipboardRect(rowRect);
     RECT toggleRc = GetGroupToggleRect(rowRect);
-    if (PtInRect(&addRc, pt)) {
+    if (supportsNewNotes && PtInRect(&addRc, pt)) {
       CreateNoteForGroup(row.groupIndex);
-    } else if (PtInRect(&clipboardRc, pt)) {
+    } else if (supportsNewNotes && PtInRect(&clipboardRc, pt)) {
       CreateNoteFromClipboardForGroup(row.groupIndex);
     } else if (PtInRect(&toggleRc, pt) || PtInRect(&rowRect, pt)) {
       ToggleGroup(row.groupIndex);
@@ -1251,6 +1269,7 @@ void App::ToggleGroup(int groupIndex) {
 void App::CreateNoteForGroup(int groupIndex) {
   if (groupIndex < 0 || groupIndex >= static_cast<int>(notesConfig_.groups.size())) return;
   const NoteGroupConfig& group = notesConfig_.groups[groupIndex];
+  if (group.type != NoteGroupType::Directory) return;
   auto actionIt = FindNewNoteEditAction(notesConfig_);
   if (actionIt == notesConfig_.actions.end()) {
     MessageBoxW(hwnd_, L"New notes require file_action.Edit.", L"MyBuddy", MB_OK | MB_ICONERROR);
@@ -1309,6 +1328,7 @@ void App::CreateNoteForGroup(int groupIndex) {
 void App::CreateNoteFromClipboardForGroup(int groupIndex) {
   if (groupIndex < 0 || groupIndex >= static_cast<int>(notesConfig_.groups.size())) return;
   const NoteGroupConfig& group = notesConfig_.groups[groupIndex];
+  if (group.type != NoteGroupType::Directory) return;
 
   std::wstring clipboardText;
   std::wstring errorMessage;
@@ -1357,6 +1377,7 @@ void App::OpenFileNote(int groupIndex, int fileIndex) {
 
 void App::RunGroupMenu(int groupIndex, POINT screenPt) {
   const NoteGroupConfig& group = notesConfig_.groups[groupIndex];
+  const bool supportsNewNotes = group.type == NoteGroupType::Directory;
   HMENU menu = CreatePopupMenu();
   if (!menu) return;
   constexpr UINT kMenuNew = 4001;
@@ -1364,8 +1385,10 @@ void App::RunGroupMenu(int groupIndex, POINT screenPt) {
   constexpr UINT kMenuRefresh = 4003;
   UINT nextActionId = 4100;
 
-  AppendMenuW(menu, MF_STRING, kMenuNew, L"New Note");
-  AppendMenuW(menu, MF_STRING, kMenuNewFromClipboard, L"New From Clipboard");
+  if (supportsNewNotes) {
+    AppendMenuW(menu, MF_STRING, kMenuNew, L"New Note");
+    AppendMenuW(menu, MF_STRING, kMenuNewFromClipboard, L"New From Clipboard");
+  }
   AppendMenuW(menu, MF_STRING, kMenuRefresh, L"Refresh");
   if (!group.groupActions.empty()) {
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
@@ -1386,9 +1409,9 @@ void App::RunGroupMenu(int groupIndex, POINT screenPt) {
     screenPt.x, screenPt.y, 0, hwnd_, nullptr);
   DestroyMenu(menu);
 
-  if (cmd == kMenuNew) {
+  if (supportsNewNotes && cmd == kMenuNew) {
     CreateNoteForGroup(groupIndex);
-  } else if (cmd == kMenuNewFromClipboard) {
+  } else if (supportsNewNotes && cmd == kMenuNewFromClipboard) {
     CreateNoteFromClipboardForGroup(groupIndex);
   } else if (cmd == kMenuRefresh) {
     ReloadConfigAndRefreshNotes();

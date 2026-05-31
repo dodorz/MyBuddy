@@ -10,24 +10,11 @@
 globalHotKey=Ctrl+Alt+B
 
 [notes_default]
-; Global file patterns, separated by ';'.
-; Typical values: *.txt;*.md
-filePatterns=*.txt;*.md
-; Default extension used when creating a new note.
-; Examples: .txt, .md
-; If empty, the first writable extension from filePatterns is used.
-createExtension=.md
 ; New notes are first created as temporary drafts, then renamed from content
 ; after the editor exits.
 ; Maximum visible items per group.
-; Integer >= 1. Default: 5
+; Integer >= 0. 0 means unlimited. Default: 5
 maxItems=5
-; Global sort field.
-; Allowed values: name, ctime, mtime
-sortBy=mtime
-; Global sort direction.
-; Allowed values: asc, desc
-sortOrder=desc
 ; Whether groups start expanded by default.
 ; Allowed values: 0, 1
 defaultGroupExpanded=1
@@ -43,6 +30,29 @@ fileActions=Edit;Reveal
 ; Default group-header context menu actions unless overridden.
 ; Must reference [dir_action.*] sections.
 groupActions=Terminal
+
+[notes_dir_default]
+; Default file patterns for dir groups, separated by ';'.
+; Typical values: *.txt;*.md
+filePatterns=*.txt;*.md
+; Default extension used when creating a new note in dir groups.
+; Examples: .txt, .md
+; If empty, the first writable extension from filePatterns is used.
+createExtension=.md
+; Default sort field for dir groups.
+; Allowed values: name, ctime, mtime
+sortBy=mtime
+; Default sort direction for dir groups.
+; Allowed values: asc, desc
+sortOrder=desc
+
+[notes_text_default]
+; Default sort field for text groups.
+; Allowed values: line, name, ctime, mtime
+sortBy=line
+; Default sort direction for text groups.
+; Allowed values: asc, desc
+sortOrder=asc
 
 [file_action.Edit]
 ; Menu text shown to the user.
@@ -77,6 +87,7 @@ path=C:\Users\USERNAME\Documents\Notes\Inbox
 ; Examples: .txt, .md
 ; createExtension=.txt
 ; Optional per-group override for max visible items.
+; 0 means unlimited.
 ; maxItems=5
 ; Optional per-group override for sort field.
 ; Allowed values: name, ctime, mtime
@@ -89,10 +100,22 @@ path=C:\Users\USERNAME\Documents\Notes\Inbox
 ; defaultFileAction=Edit
 ; Additional file-item context menu actions, separated by ';'.
 ; Must reference [file_action.*] sections.
-; fileActions=Edit;reveal
+; fileActions=Edit;Reveal
 ; Group-header context menu actions, separated by ';'.
 ; Must reference [dir_action.*] sections.
-; groupActions=terminal
+; groupActions=Terminal
+
+[note_group.todo_lines]
+; Group type.
+; Allowed values: dir, text
+type=text
+; Path points to one text file for text groups.
+path=C:\Users\USERNAME\Documents\Notes\todo.txt
+; text groups usually keep file order.
+sortBy=line
+defaultFileAction=Edit
+fileActions=Reveal
+groupActions=Terminal
 
 [note_group.work]
 ; If omitted, the group id "work" is used as the title.
@@ -106,5 +129,5 @@ sortBy=name
 sortOrder=asc
 showExtensions=0
 defaultFileAction=Edit
-fileActions=Edit;reveal
-groupActions=terminal
+fileActions=Edit;Reveal
+groupActions=Terminal

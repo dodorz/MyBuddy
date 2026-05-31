@@ -7,6 +7,7 @@
 #include <vector>
 
 enum class NoteSortBy {
+  LineOrder,
   Name,
   CreatedTime,
   ModifiedTime,
@@ -20,12 +21,17 @@ enum class SortOrder {
 enum class NoteGroupLoadState {
   Ok,
   Empty,
-  MissingDirectory,
+  MissingPath,
 };
 
 enum class ActionTarget {
   File,
   Directory,
+};
+
+enum class NoteGroupType {
+  Directory,
+  TextLines,
 };
 
 struct ActionConfig {
@@ -39,6 +45,7 @@ struct NoteGroupConfig {
   std::wstring id;
   std::wstring title;
   std::wstring path;
+  NoteGroupType type = NoteGroupType::Directory;
   bool expanded = true;
   bool showExtensions = false;
   std::vector<std::wstring> filePatterns;
@@ -51,17 +58,23 @@ struct NoteGroupConfig {
   std::vector<std::wstring> groupActions;
 };
 
-struct NotesConfig {
-  std::vector<std::wstring> defaultFilePatterns{L"*.txt", L"*.md"};
-  std::wstring defaultCreateExtension;
-  int defaultMaxItems = 5;
-  NoteSortBy defaultSortBy = NoteSortBy::ModifiedTime;
-  SortOrder defaultSortOrder = SortOrder::Desc;
-  bool defaultGroupExpanded = true;
-  bool defaultShowExtensions = false;
+struct NoteGroupDefaults {
+  bool showExtensions = false;
+  std::vector<std::wstring> filePatterns{L"*.txt", L"*.md"};
+  std::wstring createExtension;
+  int maxItems = 5;
+  NoteSortBy sortBy = NoteSortBy::ModifiedTime;
+  SortOrder sortOrder = SortOrder::Desc;
   std::wstring defaultFileAction;
-  std::vector<std::wstring> defaultFileActions;
-  std::vector<std::wstring> defaultGroupActions;
+  std::vector<std::wstring> fileActions;
+  std::vector<std::wstring> groupActions;
+};
+
+struct NotesConfig {
+  bool defaultGroupExpanded = true;
+  NoteGroupDefaults sharedDefaults;
+  NoteGroupDefaults dirDefaults;
+  NoteGroupDefaults textDefaults;
   std::map<std::wstring, ActionConfig> actions;
   std::vector<NoteGroupConfig> groups;
 };
@@ -71,6 +84,9 @@ struct NoteFile {
   std::wstring dir;
   std::wstring name;
   std::wstring stem;
+  std::wstring displayName;
+  std::wstring itemText;
+  int lineNumber = 0;
   FILETIME createdTime{};
   FILETIME modifiedTime{};
 };

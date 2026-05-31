@@ -4,8 +4,9 @@ This document defines the `config.ini` format for the notes feature.
 
 ## Overview
 
-- Each note group maps to one directory.
-- Each text or markdown file in that directory is one note item.
+- Each note group maps either to one directory or to one text file.
+- Directory groups use files as items.
+- `text` groups use non-empty lines in one text file as items.
 - Groups are shown together in one list.
 - Group headers are collapsible.
 - The add button belongs to the group header.
@@ -29,16 +30,22 @@ Supported keys:
 globalHotKey=Ctrl+Alt+B
 
 [notes_default]
-filePatterns=*.txt;*.md
-createExtension=.md
 maxItems=5
-sortBy=mtime
-sortOrder=desc
 defaultGroupExpanded=1
 showExtensions=0
 defaultFileAction=Edit
 fileActions=Edit;reveal
 groupActions=terminal
+
+[notes_dir_default]
+filePatterns=*.txt;*.md
+createExtension=.md
+sortBy=mtime
+sortOrder=desc
+
+[notes_text_default]
+sortBy=line
+sortOrder=asc
 
 [file_action.Edit]
 title=编辑
@@ -51,6 +58,15 @@ command=explorer.exe /select,"{file}"
 [dir_action.terminal]
 title=终端打开本组
 command=wt.exe -d "{group_dir}"
+
+[note_group.todo]
+title=待办
+type=text
+path=D:\Notes\todo.txt
+sortBy=line
+defaultFileAction=Edit
+fileActions=reveal
+groupActions=terminal
 
 [note_group.work]
 title=工作
@@ -81,22 +97,10 @@ Section name: `[notes_default]`
 
 Supported keys:
 
-- `filePatterns`
-  - Semicolon-separated patterns.
-  - Default: `*.txt;*.md`
-- `createExtension`
-  - Default extension used when creating a new note.
-  - Examples: `.txt`, `.md`
-  - If missing or empty, falls back to the first writable extension from `filePatterns`
 - `maxItems`
   - Max visible note items per group.
+  - `0` means unlimited
   - Default: `5`
-- `sortBy`
-  - Supported: `name`, `ctime`, `mtime`
-  - Default: `mtime`
-- `sortOrder`
-  - Supported: `asc`, `desc`
-  - Default: `desc`
 - `defaultGroupExpanded`
   - `1` or `0`
   - Default: `1`
@@ -113,6 +117,67 @@ Supported keys:
 - `groupActions`
   - Default group-header context menu actions inherited by groups
   - Must reference `dir_action` ids
+
+## Type Default Sections
+
+Optional section names:
+
+- `[notes_dir_default]`
+- `[notes_text_default]`
+
+These sections inherit from `[notes_default]`, then `[note_group.<id>]` can override again.
+
+Supported keys for `[notes_dir_default]`:
+
+- `filePatterns`
+  - Semicolon-separated patterns.
+  - Default: inherits `[notes_default]`, otherwise `*.txt;*.md`
+- `createExtension`
+  - Default extension used when creating a new note.
+  - Examples: `.txt`, `.md`
+  - If missing or empty, falls back to the first writable extension from `filePatterns`
+- `maxItems`
+  - Max visible note items per group.
+  - `0` means unlimited
+  - Default: inherits `[notes_default]`, otherwise `5`
+- `sortBy`
+  - Supported: `name`, `ctime`, `mtime`
+  - Default: `mtime`
+- `sortOrder`
+  - Supported: `asc`, `desc`
+  - Default: `desc`
+- `showExtensions`
+  - Whether note list items show filename extensions by default
+  - Supported: `1`, `0`
+  - Default: inherits `[notes_default]`, otherwise `0`
+- `defaultFileAction`
+  - Default file-item action inherited by dir groups
+- `fileActions`
+  - Default file-item context menu actions inherited by dir groups
+- `groupActions`
+  - Default group-header context menu actions inherited by dir groups
+
+Supported keys for `[notes_text_default]`:
+
+- `maxItems`
+  - Max visible text items per group.
+  - `0` means unlimited
+  - Default: inherits `[notes_default]`, otherwise `5`
+- `sortBy`
+  - Supported: `line`, `name`, `ctime`, `mtime`
+  - Default: `line`
+- `sortOrder`
+  - Supported: `asc`, `desc`
+  - Default: `asc`
+- `showExtensions`
+  - Supported: `1`, `0`
+  - Default: inherits `[notes_default]`, otherwise `0`
+- `defaultFileAction`
+  - Default file-item action inherited by text groups
+- `fileActions`
+  - Default file-item context menu actions inherited by text groups
+- `groupActions`
+  - Default group-header context menu actions inherited by text groups
 
 ## Action Sections
 
@@ -149,8 +214,16 @@ Section format: `[note_group.<id>]`
 Required keys:
 
 - `path`
+  - `directory` groups: one directory path
+  - `text` groups: one text file path
 
 Optional keys:
+
+- `type`
+  - Supported: `dir`, `text`
+  - Default: `dir`
+  - `dir`: path is a directory, files become items
+  - `text`: path is one text file, non-empty lines become items
 
 - `title`
   - If missing, defaults to the group id from `[note_group.<id>]`
@@ -160,35 +233,38 @@ Optional keys:
   - If missing, inherits `defaultGroupExpanded`
 - `showExtensions`
   - `1` or `0`
-  - If missing, inherits default `showExtensions`
+  - If missing, inherits typed default `showExtensions`
 - `filePatterns`
-  - If missing, inherits default `filePatterns`
+  - If missing, inherits typed default `filePatterns`
 - `createExtension`
-  - If missing, inherits default `createExtension`
+  - If missing, inherits typed default `createExtension`
 - `maxItems`
-  - If missing, inherits default `maxItems`
+  - If missing, inherits typed default `maxItems`
+  - `0` means unlimited
 - `sortBy`
-  - If missing, inherits default `sortBy`
+  - If missing, inherits typed default `sortBy`
 - `sortOrder`
-  - If missing, inherits default `sortOrder`
+  - If missing, inherits typed default `sortOrder`
 - `defaultFileAction`
   - Must reference a `file_action`
-  - If missing, inherits default `defaultFileAction`
+  - If missing, inherits typed default `defaultFileAction`
   - Action id used for double-click or primary open behavior
 - `fileActions`
   - Must reference `file_action` ids
-  - If missing, inherits default `fileActions`
+  - If missing, inherits typed default `fileActions`
   - Semicolon-separated action ids shown in file item context menu
 - `groupActions`
   - Must reference `dir_action` ids
-  - If missing, inherits default `groupActions`
+  - If missing, inherits typed default `groupActions`
   - Semicolon-separated action ids shown in group header context menu
 
 ## Sorting Rules
 
-- Files are filtered first.
-- Files are sorted second.
+- Directory groups are filtered first.
+- Items are sorted second.
 - `maxItems` is applied last.
+- `maxItems=0` disables item count truncation.
+- If `sortBy=line`, items keep source line order.
 - If `sortBy=name`, secondary sort is `mtime desc`.
 - If `sortBy=ctime`, secondary sort is `name asc`.
 - If `sortBy=mtime`, secondary sort is `name asc`.
@@ -199,6 +275,7 @@ Optional keys:
 - Matching is case-insensitive.
 - Only files are included, not subdirectories.
 - First implementation should enumerate one directory level only.
+- `text` groups do not use `filePatterns`.
 
 ## Add Note Behavior
 
@@ -211,6 +288,7 @@ Optional keys:
 - If the draft file was changed, it is moved into the target group directory and renamed from content.
 - Group context menu can also create a note directly from clipboard text.
 - Clipboard-created notes use the same final filename extraction and conflict handling rules.
+- `text` groups do not support creating new notes from the UI.
 
 Final filename rules:
 
@@ -228,8 +306,8 @@ Final filename rules:
 
 Group header right-click menu:
 
-- `新建笔记`
-- `从剪贴板新建`
+- `新建笔记` for directory groups only
+- `从剪贴板新建` for directory groups only
 - `刷新`
 - group actions from `groupActions`
 
@@ -248,7 +326,9 @@ Supported placeholders:
 - `{stem}`: filename without extension
 - `{group}`: group id
 - `{group_title}`: group title
-- `{group_dir}`: group root directory
+- `{group_dir}`: group directory; for `text` groups this is the source file's parent directory
+- `{line}`: line text for `text` items, otherwise empty
+- `{line_number}`: 1-based line number for `text` items, otherwise `0`
 
 ## Parsing Rules
 
