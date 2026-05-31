@@ -14,7 +14,7 @@ on:
 
 jobs:
   build:
-    runs-on: windows-latest
+    runs-on: windows-2025-vs2026
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -29,21 +29,26 @@ jobs:
           } elseif ("${{ inputs.version }}") {
             $tag = "${{ inputs.version }}"
           } else {
-            $header = Get-Content src/version.h
+            $header = Get-Content src/version.h -Raw
             if ($header -match 'MYBUDDY_VERSION_STRING\s+L"([^"]+)"') {
               $tag = $Matches[1]
+            } else {
+              throw "Could not resolve version from src/version.h"
             }
+          }
+          if (-not $tag) {
+            throw "Resolved version is empty"
           }
           if ($tag.StartsWith("v")) { $tag = $tag.Substring(1) }
           "version=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
       - name: Configure
-        run: cmake -S . -B build\vs2022 -G "Visual Studio 17 2022" -A x64
+        run: cmake -S . -B build\vs2026 -G "Visual Studio 18 2026" -A x64
 
       - name: Build
         run: |
-          cmake --build build\vs2022 --config Debug
-          cmake --build build\vs2022 --config Release
+          cmake --build build\vs2026 --config Debug
+          cmake --build build\vs2026 --config Release
 
       - name: Package
         shell: pwsh
@@ -53,8 +58,8 @@ jobs:
           $releaseZip = "MyBuddy-v$version-windows-x64-Release.zip"
           $root = Join-Path $PWD "package"
           New-Item -ItemType Directory -Force -Path $root | Out-Null
-          Copy-Item -Path "build\vs2022\Debug\MyBuddy.exe" -Destination (Join-Path $root "MyBuddy-Debug.exe")
-          Copy-Item -Path "build\vs2022\Release\MyBuddy.exe" -Destination (Join-Path $root "MyBuddy-Release.exe")
+          Copy-Item -Path "build\vs2026\Debug\MyBuddy.exe" -Destination (Join-Path $root "MyBuddy-Debug.exe")
+          Copy-Item -Path "build\vs2026\Release\MyBuddy.exe" -Destination (Join-Path $root "MyBuddy-Release.exe")
           Compress-Archive -Path (Join-Path $root "MyBuddy-Debug.exe") -DestinationPath $debugZip -Force
           Compress-Archive -Path (Join-Path $root "MyBuddy-Release.exe") -DestinationPath $releaseZip -Force
 
