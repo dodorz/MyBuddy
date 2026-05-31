@@ -4,7 +4,7 @@
 ; 2. %AppData%\MyBuddy\config.ini
 
 [meta]
-; Application name used for the AppData directory name.
+; Reserved for compatibility. AppData path is always %AppData%\MyBuddy.
 appName=MyBuddy
 
 [notes]

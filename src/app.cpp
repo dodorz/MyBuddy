@@ -1,6 +1,7 @@
 #include "app.h"
 
 #include "config.h"
+#include "resource.h"
 #include "state.h"
 #include "version.h"
 
@@ -13,10 +14,10 @@ constexpr UINT kTrayMsg = WM_APP + 1;
 constexpr UINT kTrayIconId = 1001;
 constexpr UINT kTrayOpenCmd = 2001;
 constexpr UINT kTrayExitCmd = 2002;
-constexpr int kListRowHeight = 28;
+constexpr int kListRowHeight = 30;
 constexpr int kGroupIndent = 14;
 constexpr int kFileIndent = 28;
-constexpr int kGroupAddWidth = 36;
+constexpr int kGroupAddWidth = 32;
 constexpr wchar_t kMainClass[] = L"MyBuddyMainClass";
 
 std::wstring EnsureTrailingSlash(std::wstring path) {
@@ -31,7 +32,8 @@ void AddTrayIcon(HWND hwnd) {
   nid.uID = kTrayIconId;
   nid.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
   nid.uCallbackMessage = kTrayMsg;
-  nid.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
+  nid.hIcon = reinterpret_cast<HICON>(LoadImageW(GetModuleHandleW(nullptr), MAKEINTRESOURCEW(IDI_MYBUDDY_APP),
+    IMAGE_ICON, GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), LR_DEFAULTCOLOR));
   wcscpy_s(nid.szTip, L"MyBuddy");
   Shell_NotifyIconW(NIM_ADD, &nid);
 }
@@ -93,14 +95,19 @@ std::wstring GetGroupStatusMessage(NoteGroupLoadState state, const NoteGroupConf
 int App::Run(HINSTANCE instance, int showCmd) {
   instance_ = instance;
 
-  WNDCLASSW wc{};
+  WNDCLASSEXW wc{};
+  wc.cbSize = sizeof(wc);
   wc.lpfnWndProc = App::MainWndProc;
   wc.hInstance = instance_;
   wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
   wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
+  wc.hIcon = reinterpret_cast<HICON>(LoadImageW(instance_, MAKEINTRESOURCEW(IDI_MYBUDDY_APP),
+    IMAGE_ICON, GetSystemMetrics(SM_CXICON), GetSystemMetrics(SM_CYICON), LR_DEFAULTCOLOR));
+  wc.hIconSm = reinterpret_cast<HICON>(LoadImageW(instance_, MAKEINTRESOURCEW(IDI_MYBUDDY_APP),
+    IMAGE_ICON, GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), LR_DEFAULTCOLOR));
   wc.lpszClassName = kMainClass;
   wc.cbWndExtra = sizeof(LONG_PTR);
-  RegisterClassW(&wc);
+  RegisterClassExW(&wc);
 
   std::wstring title = L"MyBuddy ";
   title += MYBUDDY_VERSION_STRING;
@@ -119,6 +126,9 @@ int App::Run(HINSTANCE instance, int showCmd) {
     instance_,
     this);
   if (!hwnd_) return 0;
+
+  SendMessageW(hwnd_, WM_SETICON, ICON_BIG, reinterpret_cast<LPARAM>(wc.hIcon));
+  SendMessageW(hwnd_, WM_SETICON, ICON_SMALL, reinterpret_cast<LPARAM>(wc.hIconSm));
 
   AddTrayIcon(hwnd_);
   UpdateTrayIconTip(hwnd_, title.c_str());
@@ -157,6 +167,7 @@ LRESULT App::HandleMainMessage(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
       if (!stateLoaded_) {
         InitializeDefaultState();
       }
+      CreateFonts();
       CreateControls();
       ApplySavedGeometry();
       RefreshNotes();
@@ -214,6 +225,7 @@ LRESULT App::HandleMainMessage(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
       ShowToTray();
       return 0;
     case WM_DESTROY:
+      DestroyFonts();
       PostQuitMessage(0);
       return 0;
     default:
@@ -326,8 +338,44 @@ void App::CreateControls() {
     reinterpret_cast<HMENU>(1),
     instance_,
     nullptr);
+  SendMessageW(listBox_, WM_SETFONT, reinterpret_cast<WPARAM>(fontBody_), TRUE);
   SetWindowLongPtrW(listBox_, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(this));
   originalListBoxProc_ = reinterpret_cast<WNDPROC>(SetWindowLongPtrW(listBox_, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(App::ListBoxProc)));
+}
+
+void App::CreateFonts() {
+  const int dpi = GetDpiForWindow(hwnd_ ? hwnd_ : GetDesktopWindow());
+  auto scale = [&](int points) {
+    return -MulDiv(points, dpi, 72);
+  };
+
+  fontBody_ = CreateFontW(
+    scale(8), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+    DEFAULT_CHARSET, OUT_OUTLINE_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+    VARIABLE_PITCH, L"Segoe UI");
+  fontGroup_ = CreateFontW(
+    scale(10), 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
+    DEFAULT_CHARSET, OUT_OUTLINE_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+    VARIABLE_PITCH, L"Segoe UI");
+  fontMeta_ = CreateFontW(
+    scale(9), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+    DEFAULT_CHARSET, OUT_OUTLINE_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+    VARIABLE_PITCH, L"Segoe UI");
+  fontSymbol_ = CreateFontW(
+    scale(11), 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
+    DEFAULT_CHARSET, OUT_OUTLINE_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+    VARIABLE_PITCH, L"Segoe UI Symbol");
+}
+
+void App::DestroyFonts() {
+  if (fontBody_) DeleteObject(fontBody_);
+  if (fontGroup_) DeleteObject(fontGroup_);
+  if (fontMeta_) DeleteObject(fontMeta_);
+  if (fontSymbol_) DeleteObject(fontSymbol_);
+  fontBody_ = nullptr;
+  fontGroup_ = nullptr;
+  fontMeta_ = nullptr;
+  fontSymbol_ = nullptr;
 }
 
 void App::LayoutControls() {
@@ -415,6 +463,7 @@ void App::DrawListItem(const DRAWITEMSTRUCT* dis) {
   const VisibleRow& row = visibleRows_[dis->itemID];
   HDC dc = dis->hDC;
   RECT rc = dis->rcItem;
+  HFONT oldFont = reinterpret_cast<HFONT>(SelectObject(dc, fontBody_));
 
   HBRUSH bg = CreateSolidBrush(row.type == VisibleRow::Type::Group ? RGB(240, 244, 248) : RGB(255, 255, 255));
   FillRect(dc, &rc, bg);
@@ -426,6 +475,7 @@ void App::DrawListItem(const DRAWITEMSTRUCT* dis) {
   if (row.type == VisibleRow::Type::GlobalMessage) {
     RECT textRc = rc;
     textRc.left += 12;
+    SelectObject(dc, fontMeta_);
     SetTextColor(dc, RGB(112, 112, 112));
     DrawTextW(dc, globalStatusMessage_.c_str(), -1, &textRc, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
   } else if (row.type == VisibleRow::Type::Group) {
@@ -436,14 +486,18 @@ void App::DrawListItem(const DRAWITEMSTRUCT* dis) {
     textRc.left += kGroupIndent + 14;
     textRc.right = addRc.left - 8;
 
+    SelectObject(dc, fontSymbol_);
     DrawTextW(dc, expandedGroups_[row.groupIndex] ? L"v" : L">", -1, &toggleRc, DT_SINGLELINE | DT_VCENTER | DT_CENTER);
+    SelectObject(dc, fontGroup_);
     DrawTextW(dc, group.title.c_str(), -1, &textRc, DT_SINGLELINE | DT_VCENTER | DT_LEFT);
-    Rectangle(dc, addRc.left, addRc.top, addRc.right, addRc.bottom);
+    SelectObject(dc, fontMeta_);
+    SetTextColor(dc, RGB(64, 98, 160));
     DrawTextW(dc, L"+", -1, &addRc, DT_SINGLELINE | DT_VCENTER | DT_CENTER);
   } else if (row.type == VisibleRow::Type::GroupMessage) {
     RECT textRc = rc;
     textRc.left += kFileIndent;
     textRc.right -= 8;
+    SelectObject(dc, fontMeta_);
     SetTextColor(dc, RGB(112, 112, 112));
     std::wstring message = GetGroupStatusMessage(groupStates_[row.groupIndex], notesConfig_.groups[row.groupIndex]);
     DrawTextW(dc, message.c_str(), -1, &textRc, DT_SINGLELINE | DT_VCENTER | DT_LEFT | DT_END_ELLIPSIS);
@@ -456,10 +510,15 @@ void App::DrawListItem(const DRAWITEMSTRUCT* dis) {
     timeRc.left = nameRc.right + 8;
     timeRc.right -= 8;
 
+    SelectObject(dc, fontBody_);
     DrawTextW(dc, file.name.c_str(), -1, &nameRc, DT_SINGLELINE | DT_VCENTER | DT_LEFT | DT_END_ELLIPSIS);
     std::wstring timeText = FormatFileTime(file.modifiedTime);
+    SelectObject(dc, fontMeta_);
+    SetTextColor(dc, RGB(96, 104, 116));
     DrawTextW(dc, timeText.c_str(), -1, &timeRc, DT_SINGLELINE | DT_VCENTER | DT_RIGHT);
   }
+
+  SelectObject(dc, oldFont);
 }
 
 int App::HitTestRow(POINT pt) const {
@@ -646,7 +705,7 @@ std::wstring App::GetAppDataDir() const {
   }
   std::wstring dir = EnsureTrailingSlash(knownPath);
   CoTaskMemFree(knownPath);
-  dir += config_.appName;
+  dir += L"MyBuddy";
   CreateDirectoryW(dir.c_str(), nullptr);
   return EnsureTrailingSlash(dir);
 }

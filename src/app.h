@@ -44,6 +44,8 @@ private:
   void SetTaskbarVisible(bool visible);
 
   void CreateControls();
+  void CreateFonts();
+  void DestroyFonts();
   void LayoutControls();
   void RefreshNotes();
   void RebuildVisibleRows();
@@ -71,6 +73,10 @@ private:
   HWND hwnd_ = nullptr;
   HWND listBox_ = nullptr;
   WNDPROC originalListBoxProc_ = nullptr;
+  HFONT fontBody_ = nullptr;
+  HFONT fontGroup_ = nullptr;
+  HFONT fontMeta_ = nullptr;
+  HFONT fontSymbol_ = nullptr;
   AppConfig config_{};
   AppState state_{};
   NotesConfig notesConfig_{};

@@ -14,6 +14,7 @@ cmake --build --preset vs-x64-release
 
 - `config.ini` is read from the program directory first, then `%AppData%\MyBuddy\`.
 - `state.dat` is stored in `%AppData%\MyBuddy\`.
+- The AppData directory is always `%AppData%\MyBuddy\`.
 - `config.ini` is for stable settings.
 - `state.dat` is for runtime state only.
 - Start from [config.ini.example](/C:/~/%5CProjects%5CMyBuddy%5Cconfig.ini.example).
