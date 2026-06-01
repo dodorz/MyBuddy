@@ -35,10 +35,6 @@ constexpr int kExpandDurationMs = 210;
 constexpr int kCollapseDurationMs = 300;
 constexpr int kAnimationTickMs = 16;
 
-int GetResizeBorderThickness() {
-  return GetSystemMetrics(SM_CXSIZEFRAME) + GetSystemMetrics(SM_CXPADDEDBORDER);
-}
-
 std::wstring EnsureTrailingSlash(std::wstring path) {
   if (!path.empty() && path.back() != L'\\') path.push_back(L'\\');
   return path;
@@ -217,6 +213,53 @@ std::wstring FormatFileTime(const FILETIME& ft) {
   return buffer;
 }
 
+int MeasureTextWidth(HDC dc, const std::wstring& text) {
+  if (text.empty()) return 0;
+  SIZE size{};
+  GetTextExtentPoint32W(dc, text.c_str(), static_cast<int>(text.size()), &size);
+  return size.cx;
+}
+
+std::wstring FormatAdaptiveFileTime(HDC dc, const FILETIME& ft, int availableWidth) {
+  SYSTEMTIME utc{};
+  SYSTEMTIME local{};
+  FileTimeToSystemTime(&ft, &utc);
+  SystemTimeToTzSpecificLocalTime(nullptr, &utc, &local);
+
+  wchar_t full[32];
+  wchar_t shortYear[32];
+  wchar_t shortYearHour[32];
+  wchar_t dateOnly[24];
+  wchar_t compactDate[24];
+  wchar_t monthDay[16];
+  wsprintfW(full, L"%04d-%02d-%02d %02d:%02d",
+    local.wYear, local.wMonth, local.wDay, local.wHour, local.wMinute);
+  wsprintfW(shortYear, L"%02d-%02d-%02d %02d:%02d",
+    local.wYear % 100, local.wMonth, local.wDay, local.wHour, local.wMinute);
+  wsprintfW(shortYearHour, L"%02d-%02d-%02d %02d",
+    local.wYear % 100, local.wMonth, local.wDay, local.wHour);
+  wsprintfW(dateOnly, L"%02d-%02d-%02d",
+    local.wYear % 100, local.wMonth, local.wDay);
+  wsprintfW(compactDate, L"%02d%02d%02d",
+    local.wYear % 100, local.wMonth, local.wDay);
+  wsprintfW(monthDay, L"%02d%02d", local.wMonth, local.wDay);
+
+  const std::wstring variants[] = {
+    full,
+    shortYear,
+    shortYearHour,
+    dateOnly,
+    compactDate,
+    monthDay,
+    L""
+  };
+
+  for (const std::wstring& variant : variants) {
+    if (MeasureTextWidth(dc, variant) <= availableWidth) return variant;
+  }
+  return L"";
+}
+
 std::wstring GetGroupStatusMessage(NoteGroupLoadState state, const NoteGroupConfig& group) {
   switch (state) {
     case NoteGroupLoadState::MissingPath:
@@ -372,7 +415,7 @@ int App::Run(HINSTANCE instance, int showCmd) {
     WS_EX_APPWINDOW | WS_EX_TOPMOST,
     kMainClass,
     title.c_str(),
-    WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
+    WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME | WS_MINIMIZEBOX,
     CW_USEDEFAULT,
     CW_USEDEFAULT,
     state_.w,
@@ -429,10 +472,6 @@ LRESULT CALLBACK App::ListBoxProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 LRESULT App::HandleMainMessage(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
   switch (msg) {
     case WM_CREATE: {
-      if (HMENU systemMenu = GetSystemMenu(hwnd, FALSE)) {
-        DeleteMenu(systemMenu, SC_MAXIMIZE, MF_BYCOMMAND);
-        DrawMenuBar(hwnd);
-      }
       LoadConfig();
       stateLoaded_ = LoadState();
       if (!stateLoaded_) {
@@ -536,37 +575,6 @@ LRESULT App::HandleMainMessage(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
       SyncHotZone();
       return 0;
     }
-    case WM_NCHITTEST: {
-      LRESULT hit = DefWindowProcW(hwnd, msg, wp, lp);
-      if (hit != HTCLIENT) return hit;
-
-      RECT windowRect{};
-      GetWindowRect(hwnd, &windowRect);
-      const int border = GetResizeBorderThickness();
-      const int x = GET_X_LPARAM(lp);
-      const int y = GET_Y_LPARAM(lp);
-
-      const bool left = x >= windowRect.left && x < windowRect.left + border;
-      const bool right = x < windowRect.right && x >= windowRect.right - border;
-      const bool top = y >= windowRect.top && y < windowRect.top + border;
-      const bool bottom = y < windowRect.bottom && y >= windowRect.bottom - border;
-
-      if (top && left) return HTTOPLEFT;
-      if (top && right) return HTTOPRIGHT;
-      if (bottom && left) return HTBOTTOMLEFT;
-      if (bottom && right) return HTBOTTOMRIGHT;
-      if (left) return HTLEFT;
-      if (right) return HTRIGHT;
-      if (top) return HTTOP;
-      if (bottom) return HTBOTTOM;
-      return hit;
-    }
-    case WM_NCLBUTTONDBLCLK:
-      if (wp == HTCAPTION) return 0;
-      break;
-    case WM_SYSCOMMAND:
-      if ((wp & 0xFFF0) == SC_MAXIMIZE) return 0;
-      break;
     case WM_CLOSE:
       ShowToTray();
       return 0;
@@ -1379,26 +1387,43 @@ void App::DrawListItem(const DRAWITEMSTRUCT* dis) {
     const NoteGroupConfig& group = notesConfig_.groups[row.groupIndex];
     RECT nameRc = rc;
     nameRc.left += kFileIndent;
-    nameRc.right -= 110;
     RECT timeRc = rc;
-    timeRc.left = nameRc.right + 8;
     timeRc.right -= 8;
 
     SelectObject(dc, fontBody_);
     const std::wstring& displayName = file.displayName.empty()
       ? (group.showExtensions ? file.name : file.stem)
       : file.displayName;
-    DrawTextW(dc, displayName.c_str(), -1, &nameRc, DT_SINGLELINE | DT_VCENTER | DT_LEFT | DT_END_ELLIPSIS);
     if (group.type == NoteGroupType::TextLines) {
+      nameRc.right = timeRc.right - 32;
+      DrawTextW(dc, displayName.c_str(), -1, &nameRc, DT_SINGLELINE | DT_VCENTER | DT_LEFT | DT_END_ELLIPSIS);
       std::wstring lineText = L"#" + std::to_wstring(file.lineNumber);
+      timeRc.left = nameRc.right + 8;
       SelectObject(dc, fontMeta_);
       SetTextColor(dc, RGB(96, 104, 116));
       DrawTextW(dc, lineText.c_str(), -1, &timeRc, DT_SINGLELINE | DT_VCENTER | DT_RIGHT);
     } else {
-      std::wstring timeText = FormatFileTime(file.modifiedTime);
+      constexpr int kFileMetaGap = 8;
+      constexpr int kMinNameWidth = 120;
+      const int contentRight = rc.right - 8;
+      const int totalWidth = contentRight - nameRc.left;
+      const int availableTimeWidth = std::max(0, totalWidth - kMinNameWidth - kFileMetaGap);
+      std::wstring timeText = FormatAdaptiveFileTime(dc, file.modifiedTime, availableTimeWidth);
+      const int timeWidth = MeasureTextWidth(dc, timeText);
+      if (!timeText.empty() && timeWidth > 0) {
+        timeRc.left = contentRight - timeWidth;
+        nameRc.right = timeRc.left - kFileMetaGap;
+      } else {
+        nameRc.right = contentRight;
+        timeRc.left = timeRc.right;
+      }
+
+      DrawTextW(dc, displayName.c_str(), -1, &nameRc, DT_SINGLELINE | DT_VCENTER | DT_LEFT | DT_END_ELLIPSIS);
       SelectObject(dc, fontMeta_);
       SetTextColor(dc, RGB(96, 104, 116));
-      DrawTextW(dc, timeText.c_str(), -1, &timeRc, DT_SINGLELINE | DT_VCENTER | DT_RIGHT);
+      if (!timeText.empty()) {
+        DrawTextW(dc, timeText.c_str(), -1, &timeRc, DT_SINGLELINE | DT_VCENTER | DT_RIGHT);
+      }
     }
   }
 
@@ -1654,7 +1679,6 @@ void App::RunGroupMenu(int groupIndex, POINT screenPt) {
   if (supportsNewNotes) {
     AppendMenuW(menu, MF_STRING, kMenuNew, L"New Note");
     AppendMenuW(menu, MF_STRING, kMenuNewFromClipboard, L"New From Clipboard");
-    AppendMenuW(menu, MF_STRING, kMenuRefresh, L"Refresh");
     if (!group.groupActions.empty()) {
       AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     }
@@ -1669,6 +1693,7 @@ void App::RunGroupMenu(int groupIndex, POINT screenPt) {
       ++nextActionId;
     }
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(menu, MF_STRING, kMenuRefresh, L"Refresh");
     AppendMenuW(menu, MF_STRING, kMenuConfig, L"Config");
 
     SetForegroundWindow(hwnd_);
@@ -1741,6 +1766,7 @@ void App::RunFileMenu(int groupIndex, int fileIndex, POINT screenPt) {
   const NoteFile& file = notesByGroup_[groupIndex][fileIndex];
   HMENU menu = CreatePopupMenu();
   if (!menu) return;
+  constexpr UINT kMenuRefresh = 5000;
   constexpr UINT kMenuConfig = 5001;
 
   UINT nextActionId = 5100;
@@ -1770,13 +1796,16 @@ void App::RunFileMenu(int groupIndex, int fileIndex, POINT screenPt) {
     ++nextActionId;
   }
   if (!actionIds.empty()) AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+  AppendMenuW(menu, MF_STRING, kMenuRefresh, L"Refresh");
   AppendMenuW(menu, MF_STRING, kMenuConfig, L"Config");
 
   SetForegroundWindow(hwnd_);
   UINT cmd = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_LEFTALIGN | TPM_TOPALIGN,
     screenPt.x, screenPt.y, 0, hwnd_, nullptr);
   DestroyMenu(menu);
-  if (cmd == kMenuConfig) {
+  if (cmd == kMenuRefresh) {
+    ReloadConfigAndRefreshNotes();
+  } else if (cmd == kMenuConfig) {
     OpenConfigFile();
   } else if (auto it = actionIds.find(cmd); it != actionIds.end()) {
     std::wstring errorMessage;
