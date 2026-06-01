@@ -54,6 +54,7 @@ struct NoteGroupConfig {
   NoteSortBy sortBy = NoteSortBy::ModifiedTime;
   SortOrder sortOrder = SortOrder::Desc;
   std::wstring defaultFileAction;
+  std::wstring deleteCommand;
   std::vector<std::wstring> fileActions;
   std::vector<std::wstring> groupActions;
 };
@@ -66,6 +67,7 @@ struct NoteGroupDefaults {
   NoteSortBy sortBy = NoteSortBy::ModifiedTime;
   SortOrder sortOrder = SortOrder::Desc;
   std::wstring defaultFileAction;
+  std::wstring deleteCommand;
   std::vector<std::wstring> fileActions;
   std::vector<std::wstring> groupActions;
 };

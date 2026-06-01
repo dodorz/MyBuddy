@@ -490,6 +490,7 @@ bool LoadNotesConfig(const std::wstring& path, NotesConfig& config) {
   config.sharedDefaults.maxItems = NormalizeMaxItems(ReadInt(path, L"notes_default", L"maxItems", 5), 5);
   config.sharedDefaults.showExtensions = false;
   config.sharedDefaults.defaultFileAction = ReadString(path, L"notes_default", L"defaultFileAction");
+  config.sharedDefaults.deleteCommand = ReadString(path, L"notes_default", L"deleteCommand");
   config.sharedDefaults.fileActions = SplitList(ReadString(path, L"notes_default", L"fileActions"));
   config.sharedDefaults.groupActions = SplitList(ReadString(path, L"notes_default", L"groupActions"));
 
@@ -513,6 +514,8 @@ bool LoadNotesConfig(const std::wstring& path, NotesConfig& config) {
   config.dirDefaults.showExtensions = ReadBool(path, L"notes_dir_default", L"showExtensions", config.dirDefaults.showExtensions);
   config.dirDefaults.defaultFileAction = ReadString(path, L"notes_dir_default", L"defaultFileAction",
     config.dirDefaults.defaultFileAction.c_str());
+  config.dirDefaults.deleteCommand = ReadString(path, L"notes_dir_default", L"deleteCommand",
+    config.dirDefaults.deleteCommand.c_str());
   {
     std::vector<std::wstring> actions = SplitList(ReadString(path, L"notes_dir_default", L"fileActions"));
     if (!actions.empty()) config.dirDefaults.fileActions = std::move(actions);
@@ -535,6 +538,8 @@ bool LoadNotesConfig(const std::wstring& path, NotesConfig& config) {
   config.textDefaults.showExtensions = false;
   config.textDefaults.defaultFileAction = ReadString(path, L"notes_text_default", L"defaultFileAction",
     config.textDefaults.defaultFileAction.c_str());
+  config.textDefaults.deleteCommand = ReadString(path, L"notes_text_default", L"deleteCommand",
+    config.textDefaults.deleteCommand.c_str());
   {
     std::vector<std::wstring> actions = SplitList(ReadString(path, L"notes_text_default", L"fileActions"));
     if (!actions.empty()) config.textDefaults.fileActions = std::move(actions);
@@ -593,6 +598,7 @@ bool LoadNotesConfig(const std::wstring& path, NotesConfig& config) {
         group.sortBy = NormalizeSortByForGroupType(group.type, ParseSortBy(rawSortBy, defaults.sortBy), defaults.sortBy);
         group.sortOrder = ParseSortOrder(ReadString(path, section.c_str(), L"sortOrder"), defaults.sortOrder);
         group.defaultFileAction = ReadString(path, section.c_str(), L"defaultFileAction", defaults.defaultFileAction.c_str());
+        group.deleteCommand = ReadString(path, section.c_str(), L"deleteCommand", defaults.deleteCommand.c_str());
         group.fileActions = SplitList(ReadString(path, section.c_str(), L"fileActions"));
         if (group.fileActions.empty()) group.fileActions = defaults.fileActions;
         group.groupActions = SplitList(ReadString(path, section.c_str(), L"groupActions"));

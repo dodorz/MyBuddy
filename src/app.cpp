@@ -141,6 +141,42 @@ std::wstring GetFileStemFromName(const std::wstring& name) {
   return pos == std::wstring::npos ? name : name.substr(0, pos);
 }
 
+struct MarkdownCheckbox {
+  enum class State {
+    None,
+    Unchecked,
+    Checked,
+  };
+
+  State state = State::None;
+  std::wstring label;
+};
+
+MarkdownCheckbox ParseMarkdownCheckbox(const std::wstring& text) {
+  MarkdownCheckbox checkbox{};
+  auto parse = [&](wchar_t marker, MarkdownCheckbox::State state) -> bool {
+    if (text.size() < 5) return false;
+    if (text[0] != L'-' || text[1] != L' ' || text[2] != L'[' || text[3] != marker || text[4] != L']') {
+      return false;
+    }
+    checkbox.state = state;
+    if (text.size() == 5) {
+      checkbox.label.clear();
+    } else if (text.size() >= 6 && text[5] == L' ') {
+      checkbox.label = text.substr(6);
+    } else {
+      checkbox.state = MarkdownCheckbox::State::None;
+      return false;
+    }
+    return true;
+  };
+
+  if (parse(L' ', MarkdownCheckbox::State::Unchecked)) return checkbox;
+  if (parse(L'x', MarkdownCheckbox::State::Checked)) return checkbox;
+  if (parse(L'X', MarkdownCheckbox::State::Checked)) return checkbox;
+  return checkbox;
+}
+
 bool BuildGroupSourceFile(const NoteGroupConfig& group, NoteFile& file) {
   if (group.type != NoteGroupType::TextLines) return false;
   WIN32_FILE_ATTRIBUTE_DATA data{};
@@ -156,6 +192,33 @@ bool BuildGroupSourceFile(const NoteGroupConfig& group, NoteFile& file) {
   file.lineNumber = 0;
   file.createdTime = data.ftCreationTime;
   file.modifiedTime = data.ftLastWriteTime;
+  return true;
+}
+
+bool MovePathToRecycleBin(const std::wstring& path, std::wstring* errorMessage) {
+  if (path.empty()) {
+    if (errorMessage) *errorMessage = L"Path is empty.";
+    return false;
+  }
+
+  std::vector<wchar_t> from(path.begin(), path.end());
+  from.push_back(L'\0');
+  from.push_back(L'\0');
+
+  SHFILEOPSTRUCTW op{};
+  op.wFunc = FO_DELETE;
+  op.pFrom = from.data();
+  op.fFlags = FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_NOERRORUI | FOF_SILENT;
+
+  int result = SHFileOperationW(&op);
+  if (result != 0) {
+    if (errorMessage) *errorMessage = L"Failed to move item to Recycle Bin. Error code: " + std::to_wstring(result);
+    return false;
+  }
+  if (op.fAnyOperationsAborted) {
+    if (errorMessage) *errorMessage = L"Delete operation was aborted.";
+    return false;
+  }
   return true;
 }
 
@@ -1396,7 +1459,23 @@ void App::DrawListItem(const DRAWITEMSTRUCT* dis) {
       : file.displayName;
     if (group.type == NoteGroupType::TextLines) {
       nameRc.right = timeRc.right - 32;
-      DrawTextW(dc, displayName.c_str(), -1, &nameRc, DT_SINGLELINE | DT_VCENTER | DT_LEFT | DT_END_ELLIPSIS);
+      MarkdownCheckbox checkbox = ParseMarkdownCheckbox(displayName);
+      if (checkbox.state == MarkdownCheckbox::State::None) {
+        DrawTextW(dc, displayName.c_str(), -1, &nameRc, DT_SINGLELINE | DT_VCENTER | DT_LEFT | DT_END_ELLIPSIS);
+      } else {
+        RECT boxRc{};
+        boxRc.left = nameRc.left;
+        boxRc.top = rc.top + ((rc.bottom - rc.top) - 13) / 2;
+        boxRc.right = boxRc.left + 13;
+        boxRc.bottom = boxRc.top + 13;
+        UINT checkboxState = DFCS_BUTTONCHECK;
+        if (checkbox.state == MarkdownCheckbox::State::Checked) checkboxState |= DFCS_CHECKED;
+        DrawFrameControl(dc, &boxRc, DFC_BUTTON, checkboxState);
+
+        RECT labelRc = nameRc;
+        labelRc.left = boxRc.right + 6;
+        DrawTextW(dc, checkbox.label.c_str(), -1, &labelRc, DT_SINGLELINE | DT_VCENTER | DT_LEFT | DT_END_ELLIPSIS);
+      }
       std::wstring lineText = L"#" + std::to_wstring(file.lineNumber);
       timeRc.left = nameRc.right + 8;
       SelectObject(dc, fontMeta_);
@@ -1663,6 +1742,75 @@ void App::OpenFileNote(int groupIndex, int fileIndex) {
   }
 }
 
+void App::DeleteFileNote(int groupIndex, int fileIndex) {
+  if (groupIndex < 0 || groupIndex >= static_cast<int>(notesConfig_.groups.size())) return;
+  if (fileIndex < 0 || fileIndex >= static_cast<int>(notesByGroup_[groupIndex].size())) return;
+  const NoteGroupConfig& group = notesConfig_.groups[groupIndex];
+  const NoteFile& file = notesByGroup_[groupIndex][fileIndex];
+
+  if (!group.deleteCommand.empty()) {
+    ActionConfig deleteAction{};
+    deleteAction.id = L"Delete";
+    deleteAction.title = L"Delete";
+    deleteAction.command = group.deleteCommand;
+    deleteAction.target = ActionTarget::File;
+
+    std::wstring errorMessage;
+    std::wstring command;
+    if (!ExecuteActionAndWait(deleteAction, group, &file, &errorMessage, &command)) {
+      std::wstring message = L"Failed to run delete command.\n\nCommand:\n" + command + L"\n\n" + errorMessage;
+      MessageBoxW(hwnd_, message.c_str(), L"MyBuddy", MB_OK | MB_ICONERROR);
+      return;
+    }
+    RefreshGroup(groupIndex);
+    return;
+  }
+
+  std::wstring errorMessage;
+  if (!MovePathToRecycleBin(file.path, &errorMessage)) {
+    std::wstring message = L"Failed to delete file.\n\n" + errorMessage;
+    MessageBoxW(hwnd_, message.c_str(), L"MyBuddy", MB_OK | MB_ICONERROR);
+    return;
+  }
+
+  RefreshGroup(groupIndex);
+}
+
+void App::DeleteTextGroupSource(int groupIndex) {
+  if (groupIndex < 0 || groupIndex >= static_cast<int>(notesConfig_.groups.size())) return;
+  const NoteGroupConfig& group = notesConfig_.groups[groupIndex];
+  if (group.type != NoteGroupType::TextLines) return;
+  NoteFile sourceFile{};
+  const bool hasSourceFile = BuildGroupSourceFile(group, sourceFile);
+
+  if (hasSourceFile && !group.deleteCommand.empty()) {
+    ActionConfig deleteAction{};
+    deleteAction.id = L"Delete";
+    deleteAction.title = L"Delete";
+    deleteAction.command = group.deleteCommand;
+    deleteAction.target = ActionTarget::File;
+
+    std::wstring errorMessage;
+    std::wstring command;
+    if (!ExecuteActionAndWait(deleteAction, group, &sourceFile, &errorMessage, &command)) {
+      std::wstring message = L"Failed to run delete command.\n\nCommand:\n" + command + L"\n\n" + errorMessage;
+      MessageBoxW(hwnd_, message.c_str(), L"MyBuddy", MB_OK | MB_ICONERROR);
+      return;
+    }
+    RefreshGroup(groupIndex);
+    return;
+  }
+
+  std::wstring errorMessage;
+  if (!MovePathToRecycleBin(group.path, &errorMessage)) {
+    std::wstring message = L"Failed to delete file.\n\n" + errorMessage;
+    MessageBoxW(hwnd_, message.c_str(), L"MyBuddy", MB_OK | MB_ICONERROR);
+    return;
+  }
+
+  RefreshGroup(groupIndex);
+}
+
 void App::RunGroupMenu(int groupIndex, POINT screenPt) {
   const NoteGroupConfig& group = notesConfig_.groups[groupIndex];
   const bool supportsNewNotes = group.type == NoteGroupType::Directory;
@@ -1674,6 +1822,7 @@ void App::RunGroupMenu(int groupIndex, POINT screenPt) {
   constexpr UINT kMenuNewFromClipboard = 4002;
   constexpr UINT kMenuRefresh = 4003;
   constexpr UINT kMenuConfig = 4004;
+  constexpr UINT kMenuDelete = 4005;
   UINT nextActionId = 4100;
 
   if (supportsNewNotes) {
@@ -1738,7 +1887,8 @@ void App::RunGroupMenu(int groupIndex, POINT screenPt) {
     actionIds[nextActionId] = actionId;
     ++nextActionId;
   }
-  if (!actionIds.empty()) AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+  if (hasSourceFile) AppendMenuW(menu, MF_STRING, kMenuDelete, L"Delete");
+  if (!actionIds.empty() || hasSourceFile) AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
   AppendMenuW(menu, MF_STRING, kMenuRefresh, L"Refresh");
   AppendMenuW(menu, MF_STRING, kMenuConfig, L"Config");
 
@@ -1747,7 +1897,9 @@ void App::RunGroupMenu(int groupIndex, POINT screenPt) {
     screenPt.x, screenPt.y, 0, hwnd_, nullptr);
   DestroyMenu(menu);
 
-  if (cmd == kMenuRefresh) {
+  if (cmd == kMenuDelete) {
+    DeleteTextGroupSource(groupIndex);
+  } else if (cmd == kMenuRefresh) {
     ReloadConfigAndRefreshNotes();
   } else if (cmd == kMenuConfig) {
     OpenConfigFile();
@@ -1768,6 +1920,8 @@ void App::RunFileMenu(int groupIndex, int fileIndex, POINT screenPt) {
   if (!menu) return;
   constexpr UINT kMenuRefresh = 5000;
   constexpr UINT kMenuConfig = 5001;
+  constexpr UINT kMenuDelete = 5002;
+  const bool canDelete = group.type == NoteGroupType::Directory;
 
   UINT nextActionId = 5100;
   std::unordered_map<UINT, std::wstring> actionIds;
@@ -1795,7 +1949,8 @@ void App::RunFileMenu(int groupIndex, int fileIndex, POINT screenPt) {
     actionIds[nextActionId] = actionId;
     ++nextActionId;
   }
-  if (!actionIds.empty()) AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+  if (canDelete) AppendMenuW(menu, MF_STRING, kMenuDelete, L"Delete");
+  if (!actionIds.empty() || canDelete) AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
   AppendMenuW(menu, MF_STRING, kMenuRefresh, L"Refresh");
   AppendMenuW(menu, MF_STRING, kMenuConfig, L"Config");
 
@@ -1803,7 +1958,9 @@ void App::RunFileMenu(int groupIndex, int fileIndex, POINT screenPt) {
   UINT cmd = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_LEFTALIGN | TPM_TOPALIGN,
     screenPt.x, screenPt.y, 0, hwnd_, nullptr);
   DestroyMenu(menu);
-  if (cmd == kMenuRefresh) {
+  if (canDelete && cmd == kMenuDelete) {
+    DeleteFileNote(groupIndex, fileIndex);
+  } else if (cmd == kMenuRefresh) {
     ReloadConfigAndRefreshNotes();
   } else if (cmd == kMenuConfig) {
     OpenConfigFile();

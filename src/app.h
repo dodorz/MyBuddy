@@ -105,6 +105,8 @@ private:
   void CreateNoteForGroup(int groupIndex);
   void CreateNoteFromClipboardForGroup(int groupIndex);
   void OpenFileNote(int groupIndex, int fileIndex);
+  void DeleteFileNote(int groupIndex, int fileIndex);
+  void DeleteTextGroupSource(int groupIndex);
   void RunGroupMenu(int groupIndex, POINT screenPt);
   void RunFileMenu(int groupIndex, int fileIndex, POINT screenPt);
   void RunBlankMenu(POINT screenPt);

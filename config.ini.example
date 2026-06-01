@@ -21,6 +21,11 @@ defaultGroupExpanded=1
 ; Default file action for all groups unless overridden.
 ; Must reference a [file_action.*] section.
 defaultFileAction=Edit
+; Optional custom command used by the Delete menu item.
+; If omitted, Delete moves the file to Recycle Bin.
+; Available placeholders:
+; {file} {dir} {name} {stem} {group} {group_title} {group_dir}
+; deleteCommand=some-tool.exe "{file}"
 ; Default file-item context menu actions unless overridden.
 ; Must reference [file_action.*] sections.
 fileActions=Edit;Reveal
@@ -45,6 +50,9 @@ sortOrder=desc
 ; Whether dir-group file items show file extensions by default.
 ; Allowed values: 0, 1. Default: 0
 showExtensions=0
+; Optional default command used by the Delete menu item in dir groups.
+; If omitted, Delete moves the file to Recycle Bin.
+; deleteCommand=some-tool.exe "{file}"
 
 [notes_text_default]
 ; Default sort field for text groups.
@@ -53,6 +61,9 @@ sortBy=line
 ; Default sort direction for text groups.
 ; Allowed values: asc, desc
 sortOrder=asc
+; Optional default command used by the Delete menu item for text-group source files.
+; If omitted, Delete moves the source file to Recycle Bin.
+; deleteCommand=some-tool.exe "{file}"
 
 [file_action.Edit]
 ; Menu text shown to the user.
@@ -98,6 +109,9 @@ path=C:\Users\USERNAME\Documents\Notes\Inbox
 ; Action id used when clicking a file item or after creating a new file.
 ; Must reference a [file_action.*] section.
 ; defaultFileAction=Edit
+; Optional per-group override for the Delete menu item command.
+; If omitted, Delete moves the target file to Recycle Bin.
+; deleteCommand=some-tool.exe "{file}"
 ; Additional file-item context menu actions, separated by ';'.
 ; Must reference [file_action.*] sections.
 ; fileActions=Edit;Reveal
@@ -114,6 +128,7 @@ path=C:\Users\USERNAME\Documents\Notes\todo.txt
 ; text groups usually keep file order.
 sortBy=line
 defaultFileAction=Edit
+; deleteCommand=some-tool.exe "{file}"
 fileActions=Reveal
 groupActions=Terminal
 
@@ -129,5 +144,6 @@ sortBy=name
 sortOrder=asc
 showExtensions=0
 defaultFileAction=Edit
+; deleteCommand=some-tool.exe "{file}"
 fileActions=Edit;Reveal
 groupActions=Terminal

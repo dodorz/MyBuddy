@@ -108,6 +108,10 @@ Supported keys:
 - `defaultFileAction`
   - Default file-item action inherited by groups
   - Must reference a `file_action`
+- `deleteCommand`
+  - Optional command used by the built-in Delete menu item
+  - Uses the same placeholders as `file_action` commands
+  - If missing, Delete moves the target file to Recycle Bin
 - `fileActions`
   - Default file-item context menu actions inherited by groups
   - Must reference `file_action` ids
@@ -149,6 +153,9 @@ Supported keys for `[notes_dir_default]`:
   - Default: `0`
 - `defaultFileAction`
   - Default file-item action inherited by dir groups
+- `deleteCommand`
+  - Optional command used by the built-in Delete menu item for dir-group file items
+  - If missing, Delete moves the file to Recycle Bin
 - `fileActions`
   - Default file-item context menu actions inherited by dir groups
 - `groupActions`
@@ -168,6 +175,9 @@ Supported keys for `[notes_text_default]`:
   - Default: `asc`
 - `defaultFileAction`
   - Default file-item action inherited by text groups
+- `deleteCommand`
+  - Optional command used by the built-in Delete menu item for text-group source files
+  - If missing, Delete moves the source file to Recycle Bin
 - `fileActions`
   - Default file-item context menu actions inherited by text groups
 - `groupActions`
@@ -244,6 +254,10 @@ Optional keys:
   - Must reference a `file_action`
   - If missing, inherits typed default `defaultFileAction`
   - Action id used for double-click or primary open behavior
+- `deleteCommand`
+  - If missing, inherits typed default `deleteCommand`
+  - Uses the same placeholders as `file_action` commands
+  - If still missing, Delete moves the target file to Recycle Bin
 - `fileActions`
   - Must reference `file_action` ids
   - If missing, inherits typed default `fileActions`
@@ -311,6 +325,13 @@ File item right-click menu:
 
 - default file action
 - file actions from `fileActions`
+- delete item
+
+Text-group header right-click menu:
+
+- default file action for the source file
+- file actions from `fileActions`
+- delete item
 
 ## Command Template Variables
 
