@@ -271,9 +271,11 @@ bool GroupSupportsNewNotes(const NoteGroupConfig& group) {
 
 bool TryFindTomlFrontMatter(const std::vector<std::wstring>& lines, size_t& contentStartLine) {
   contentStartLine = 0;
-  if (lines.empty() || Trim(lines[0]) != L"+++") return false;
+  if (lines.empty()) return false;
+  const std::wstring delimiter = Trim(lines[0]);
+  if (delimiter != L"+++" && delimiter != L"---") return false;
   for (size_t i = 1; i < lines.size(); ++i) {
-    if (Trim(lines[i]) == L"+++") {
+    if (Trim(lines[i]) == delimiter) {
       contentStartLine = i + 1;
       return true;
     }
@@ -283,9 +285,10 @@ bool TryFindTomlFrontMatter(const std::vector<std::wstring>& lines, size_t& cont
 
 std::wstring TryParseTomlTitle(const std::vector<std::wstring>& lines, size_t& contentStartLine) {
   if (!TryFindTomlFrontMatter(lines, contentStartLine)) return L"";
+  const std::wstring delimiter = Trim(lines[0]);
   for (size_t i = 1; i < lines.size(); ++i) {
     std::wstring line = Trim(lines[i]);
-    if (line == L"+++") {
+    if (line == delimiter) {
       contentStartLine = i + 1;
       break;
     }
@@ -324,6 +327,34 @@ std::wstring ExtractNoteBaseName(const std::wstring& path) {
   }
 
   return SanitizeFileBaseName(candidate);
+}
+
+std::wstring ExtractTextGroupTitle(const std::wstring& path) {
+  const size_t slash = path.find_last_of(L"\\/");
+  const std::wstring sourceName = slash == std::wstring::npos ? path : path.substr(slash + 1);
+  const std::wstring sourceStem = GetFileStem(sourceName);
+  const size_t dot = path.find_last_of(L'.');
+  const std::wstring extension = dot == std::wstring::npos
+    ? L""
+    : ToLower(NormalizeExtension(path.substr(dot)));
+  if (extension != L".md") {
+    return sourceStem.empty() ? sourceName : sourceStem;
+  }
+
+  std::vector<std::wstring> lines = SplitLines(ReadTextFile(path));
+  size_t contentStart = 0;
+  std::wstring title = TryParseTomlTitle(lines, contentStart);
+  if (!title.empty()) return title;
+
+  if (contentStart < lines.size()) {
+    std::wstring firstLine = Trim(lines[contentStart]);
+    if (!firstLine.empty() && firstLine[0] == L'#') {
+      title = StripMdHeading(firstLine);
+      if (!title.empty()) return title;
+    }
+  }
+
+  return sourceStem.empty() ? sourceName : sourceStem;
 }
 
 std::wstring ChooseCreateExtension(const NoteGroupConfig& group) {
@@ -539,9 +570,14 @@ bool LoadNotesConfig(const std::wstring& path, NotesConfig& config) {
       NoteGroupConfig group{};
       group.id = section.substr(11);
       group.title = ReadString(path, section.c_str(), L"title");
-      if (group.title.empty()) group.title = group.id;
       group.path = ReadString(path, section.c_str(), L"path");
       group.type = ParseGroupType(ReadString(path, section.c_str(), L"type", L"dir"), NoteGroupType::Directory);
+      if (group.title.empty()) {
+        if (group.type == NoteGroupType::TextLines && !group.path.empty()) {
+          group.title = ExtractTextGroupTitle(group.path);
+        }
+        if (group.title.empty()) group.title = group.id;
+      }
       if (!group.id.empty() && !group.title.empty() && !group.path.empty()) {
         const NoteGroupDefaults& defaults =
           group.type == NoteGroupType::Directory ? config.dirDefaults : config.textDefaults;
