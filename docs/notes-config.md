@@ -33,7 +33,6 @@ globalHotKey=Ctrl+Alt+B
 [notes_default]
 maxItems=5
 defaultGroupExpanded=1
-showExtensions=0
 defaultFileAction=Edit
 fileActions=Edit;reveal
 groupActions=terminal
@@ -43,6 +42,7 @@ filePatterns=*.txt;*.md
 createExtension=.md
 sortBy=mtime
 sortOrder=desc
+showExtensions=0
 
 [notes_text_default]
 sortBy=line
@@ -105,10 +105,6 @@ Supported keys:
 - `defaultGroupExpanded`
   - `1` or `0`
   - Default: `1`
-- `showExtensions`
-  - Whether note list items show filename extensions by default
-  - Supported: `1`, `0`
-  - Default: `0`
 - `defaultFileAction`
   - Default file-item action inherited by groups
   - Must reference a `file_action`
@@ -148,9 +144,9 @@ Supported keys for `[notes_dir_default]`:
   - Supported: `asc`, `desc`
   - Default: `desc`
 - `showExtensions`
-  - Whether note list items show filename extensions by default
+  - Whether `dir`-group file items show filename extensions by default
   - Supported: `1`, `0`
-  - Default: inherits `[notes_default]`, otherwise `0`
+  - Default: `0`
 - `defaultFileAction`
   - Default file-item action inherited by dir groups
 - `fileActions`
@@ -170,9 +166,6 @@ Supported keys for `[notes_text_default]`:
 - `sortOrder`
   - Supported: `asc`, `desc`
   - Default: `asc`
-- `showExtensions`
-  - Supported: `1`, `0`
-  - Default: inherits `[notes_default]`, otherwise `0`
 - `defaultFileAction`
   - Default file-item action inherited by text groups
 - `fileActions`
@@ -234,6 +227,7 @@ Optional keys:
   - If missing, inherits `defaultGroupExpanded`
 - `showExtensions`
   - `1` or `0`
+  - Applies to `dir` groups only
   - If missing, inherits typed default `showExtensions`
 - `filePatterns`
   - If missing, inherits typed default `filePatterns`

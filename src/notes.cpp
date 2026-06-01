@@ -488,7 +488,7 @@ bool LoadNotesConfig(const std::wstring& path, NotesConfig& config) {
   }
   config.sharedDefaults.createExtension = NormalizeExtension(ReadString(path, L"notes_default", L"createExtension"));
   config.sharedDefaults.maxItems = NormalizeMaxItems(ReadInt(path, L"notes_default", L"maxItems", 5), 5);
-  config.sharedDefaults.showExtensions = ReadBool(path, L"notes_default", L"showExtensions", false);
+  config.sharedDefaults.showExtensions = false;
   config.sharedDefaults.defaultFileAction = ReadString(path, L"notes_default", L"defaultFileAction");
   config.sharedDefaults.fileActions = SplitList(ReadString(path, L"notes_default", L"fileActions"));
   config.sharedDefaults.groupActions = SplitList(ReadString(path, L"notes_default", L"groupActions"));
@@ -532,7 +532,7 @@ bool LoadNotesConfig(const std::wstring& path, NotesConfig& config) {
     ReadInt(path, L"notes_text_default", L"maxItems", config.textDefaults.maxItems), config.textDefaults.maxItems);
   config.textDefaults.sortBy = ParseSortBy(ReadString(path, L"notes_text_default", L"sortBy"), config.textDefaults.sortBy);
   config.textDefaults.sortOrder = ParseSortOrder(ReadString(path, L"notes_text_default", L"sortOrder"), config.textDefaults.sortOrder);
-  config.textDefaults.showExtensions = ReadBool(path, L"notes_text_default", L"showExtensions", config.textDefaults.showExtensions);
+  config.textDefaults.showExtensions = false;
   config.textDefaults.defaultFileAction = ReadString(path, L"notes_text_default", L"defaultFileAction",
     config.textDefaults.defaultFileAction.c_str());
   {
@@ -582,7 +582,9 @@ bool LoadNotesConfig(const std::wstring& path, NotesConfig& config) {
         const NoteGroupDefaults& defaults =
           group.type == NoteGroupType::Directory ? config.dirDefaults : config.textDefaults;
         group.expanded = ReadBool(path, section.c_str(), L"expanded", config.defaultGroupExpanded);
-        group.showExtensions = ReadBool(path, section.c_str(), L"showExtensions", defaults.showExtensions);
+        group.showExtensions = group.type == NoteGroupType::Directory
+          ? ReadBool(path, section.c_str(), L"showExtensions", defaults.showExtensions)
+          : false;
         group.filePatterns = SplitList(ReadString(path, section.c_str(), L"filePatterns"));
         if (group.filePatterns.empty()) group.filePatterns = defaults.filePatterns;
         group.createExtension = NormalizeExtension(ReadString(path, section.c_str(), L"createExtension", defaults.createExtension.c_str()));
@@ -630,7 +632,7 @@ void LoadNoteFiles(const NoteGroupConfig& group, std::vector<NoteFile>& files, N
         file.dir = group.path;
         file.name = ffd.cFileName;
         file.stem = GetFileStem(file.name);
-        file.displayName = file.name;
+        file.displayName.clear();
         file.itemText = file.stem;
         file.createdTime = ffd.ftCreationTime;
         file.modifiedTime = ffd.ftLastWriteTime;
