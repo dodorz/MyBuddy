@@ -1302,6 +1302,12 @@ void App::RefreshGroup(int groupIndex) {
 }
 
 void App::RebuildVisibleRows() {
+  int topIndex = 0;
+  if (listBox_) {
+    LRESULT result = SendMessageW(listBox_, LB_GETTOPINDEX, 0, 0);
+    if (result != LB_ERR) topIndex = static_cast<int>(result);
+  }
+
   visibleRows_.clear();
   if (!globalStatusMessage_.empty()) {
     visibleRows_.push_back({VisibleRow::Type::GlobalMessage, -1, -1});
@@ -1322,6 +1328,10 @@ void App::RebuildVisibleRows() {
   SendMessageW(listBox_, LB_RESETCONTENT, 0, 0);
   for (size_t i = 0; i < visibleRows_.size(); ++i) {
     SendMessageW(listBox_, LB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L""));
+  }
+  if (!visibleRows_.empty()) {
+    topIndex = std::clamp(topIndex, 0, static_cast<int>(visibleRows_.size()) - 1);
+    SendMessageW(listBox_, LB_SETTOPINDEX, static_cast<WPARAM>(topIndex), 0);
   }
   SendMessageW(listBox_, WM_SETREDRAW, TRUE, 0);
   InvalidateList();
