@@ -269,9 +269,20 @@ bool GroupSupportsNewNotes(const NoteGroupConfig& group) {
   return group.type == NoteGroupType::Directory;
 }
 
-std::wstring TryParseTomlTitle(const std::vector<std::wstring>& lines, size_t& contentStartLine) {
+bool TryFindTomlFrontMatter(const std::vector<std::wstring>& lines, size_t& contentStartLine) {
   contentStartLine = 0;
-  if (lines.empty() || Trim(lines[0]) != L"+++") return L"";
+  if (lines.empty() || Trim(lines[0]) != L"+++") return false;
+  for (size_t i = 1; i < lines.size(); ++i) {
+    if (Trim(lines[i]) == L"+++") {
+      contentStartLine = i + 1;
+      return true;
+    }
+  }
+  return false;
+}
+
+std::wstring TryParseTomlTitle(const std::vector<std::wstring>& lines, size_t& contentStartLine) {
+  if (!TryFindTomlFrontMatter(lines, contentStartLine)) return L"";
   for (size_t i = 1; i < lines.size(); ++i) {
     std::wstring line = Trim(lines[i]);
     if (line == L"+++") {
@@ -557,7 +568,7 @@ bool LoadNotesConfig(const std::wstring& path, NotesConfig& config) {
   return true;
 }
 
-void LoadNoteFiles(const NoteGroupConfig& group, std::vector<NoteFile>& files, NoteGroupLoadState* state) {
+void LoadNoteFiles(const NoteGroupConfig& group, std::vector<NoteFile>& files, NoteGroupLoadState* state, bool ignoreMaxItems) {
   files.clear();
   if (state) *state = NoteGroupLoadState::Ok;
   std::set<std::wstring> seen;
@@ -607,7 +618,12 @@ void LoadNoteFiles(const NoteGroupConfig& group, std::vector<NoteFile>& files, N
     const std::wstring sourceName = group.path.substr(group.path.find_last_of(L"\\/") + 1);
     const std::wstring sourceStem = GetFileStem(sourceName);
     const std::wstring sourceDir = GetParentDir(group.path);
-    for (size_t i = 0; i < lines.size(); ++i) {
+    size_t contentStart = 0;
+    const std::wstring sourceExtension = ToLower(NormalizeExtension(group.path.substr(group.path.find_last_of(L'.'))));
+    if (sourceExtension == L".md") {
+      TryFindTomlFrontMatter(lines, contentStart);
+    }
+    for (size_t i = contentStart; i < lines.size(); ++i) {
       std::wstring text = Trim(lines[i]);
       if (text.empty()) continue;
 
@@ -652,7 +668,7 @@ void LoadNoteFiles(const NoteGroupConfig& group, std::vector<NoteFile>& files, N
   };
 
   std::sort(files.begin(), files.end(), compare);
-  if (group.maxItems > 0 && static_cast<int>(files.size()) > group.maxItems) {
+  if (!ignoreMaxItems && group.maxItems > 0 && static_cast<int>(files.size()) > group.maxItems) {
     files.resize(group.maxItems);
   }
   if (files.empty() && state) {

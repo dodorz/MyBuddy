@@ -21,6 +21,7 @@ constexpr UINT kTrayExitCmd = 2002;
 constexpr int kListRowHeight = 30;
 constexpr int kGroupIndent = 14;
 constexpr int kFileIndent = 28;
+constexpr int kGroupButtonWidth = 32;
 constexpr int kGroupAddWidth = 32;
 constexpr int kGroupClipboardWidth = 32;
 constexpr wchar_t kMainClass[] = L"MyBuddyMainClass";
@@ -132,6 +133,34 @@ bool ParseHotKeySpec(const std::wstring& spec, UINT& modifiers, UINT& vk) {
   }
 
   return modifiers != 0 && vk != 0;
+}
+
+std::wstring GetFileNameFromPath(const std::wstring& path) {
+  const size_t pos = path.find_last_of(L"\\/");
+  return pos == std::wstring::npos ? path : path.substr(pos + 1);
+}
+
+std::wstring GetFileStemFromName(const std::wstring& name) {
+  const size_t pos = name.find_last_of(L'.');
+  return pos == std::wstring::npos ? name : name.substr(0, pos);
+}
+
+bool BuildGroupSourceFile(const NoteGroupConfig& group, NoteFile& file) {
+  if (group.type != NoteGroupType::TextLines) return false;
+  WIN32_FILE_ATTRIBUTE_DATA data{};
+  if (!GetFileAttributesExW(group.path.c_str(), GetFileExInfoStandard, &data)) return false;
+  file = NoteFile{};
+  file.path = group.path;
+  const size_t pos = group.path.find_last_of(L"\\/");
+  file.dir = pos == std::wstring::npos ? L"" : group.path.substr(0, pos);
+  file.name = GetFileNameFromPath(group.path);
+  file.stem = GetFileStemFromName(file.name);
+  file.displayName = file.name;
+  file.itemText.clear();
+  file.lineNumber = 0;
+  file.createdTime = data.ftCreationTime;
+  file.modifiedTime = data.ftLastWriteTime;
+  return true;
 }
 
 void AddTrayIcon(HWND hwnd) {
@@ -609,6 +638,7 @@ bool App::LoadConfig() {
   if (GetFileAttributesW(path.c_str()) == INVALID_FILE_ATTRIBUTES) {
     path = fallbackPath;
   }
+  currentConfigPath_ = path;
 
   hotKeySpec_ = ReadIniString(path, L"app", L"globalHotKey", L"Ctrl+Alt+B");
   if (!ParseHotKeySpec(hotKeySpec_, hotKeyModifiers_, hotKeyVk_)) {
@@ -1144,9 +1174,16 @@ void App::LayoutControls() {
 }
 
 void App::RefreshNotes(const std::unordered_map<std::wstring, bool>* expandedStateByGroupId) {
+  std::unordered_map<std::wstring, bool> showAllStateByGroupId;
+  const int oldCount = static_cast<int>(std::min(notesConfig_.groups.size(), showAllGroups_.size()));
+  for (int i = 0; i < oldCount; ++i) {
+    showAllStateByGroupId[notesConfig_.groups[i].id] = showAllGroups_[i];
+  }
+
   notesByGroup_.clear();
   groupStates_.clear();
   expandedGroups_.clear();
+  showAllGroups_.clear();
   globalStatusMessage_.clear();
   if (notesConfig_.groups.empty()) {
     globalStatusMessage_ = L"No note groups configured. Add [note_group.<id>] sections to config.ini.";
@@ -1154,7 +1191,11 @@ void App::RefreshNotes(const std::unordered_map<std::wstring, bool>* expandedSta
   for (const NoteGroupConfig& group : notesConfig_.groups) {
     std::vector<NoteFile> files;
     NoteGroupLoadState state = NoteGroupLoadState::Ok;
-    LoadNoteFiles(group, files, &state);
+    bool showAll = false;
+    if (auto it = showAllStateByGroupId.find(group.id); it != showAllStateByGroupId.end()) {
+      showAll = it->second;
+    }
+    LoadNoteFiles(group, files, &state, showAll);
     notesByGroup_.push_back(std::move(files));
     groupStates_.push_back(state);
     bool expanded = group.expanded;
@@ -1164,6 +1205,7 @@ void App::RefreshNotes(const std::unordered_map<std::wstring, bool>* expandedSta
       }
     }
     expandedGroups_.push_back(expanded);
+    showAllGroups_.push_back(showAll);
   }
   RebuildVisibleRows();
 }
@@ -1182,7 +1224,8 @@ void App::ReloadConfigAndRefreshNotes() {
 void App::RefreshGroup(int groupIndex) {
   if (groupIndex < 0 || groupIndex >= static_cast<int>(notesConfig_.groups.size())) return;
   NoteGroupLoadState state = NoteGroupLoadState::Ok;
-  LoadNoteFiles(notesConfig_.groups[groupIndex], notesByGroup_[groupIndex], &state);
+  bool showAll = groupIndex < static_cast<int>(showAllGroups_.size()) && showAllGroups_[groupIndex];
+  LoadNoteFiles(notesConfig_.groups[groupIndex], notesByGroup_[groupIndex], &state, showAll);
   groupStates_[groupIndex] = state;
   RebuildVisibleRows();
 }
@@ -1229,6 +1272,19 @@ RECT App::GetGroupToggleRect(const RECT& rowRect) const {
   return RECT{ rowRect.left + 4, rowRect.top + 4, rowRect.left + 24, rowRect.bottom - 4 };
 }
 
+RECT App::GetGroupShowAllRect(const RECT& rowRect) const {
+  return RECT{
+    rowRect.right - kGroupClipboardWidth - kGroupAddWidth - 12,
+    rowRect.top + 4,
+    rowRect.right - kGroupClipboardWidth - 12,
+    rowRect.bottom - 4
+  };
+}
+
+RECT App::GetGroupOpenRect(const RECT& rowRect) const {
+  return RECT{ rowRect.right - kGroupClipboardWidth - 8, rowRect.top + 4, rowRect.right - 8, rowRect.bottom - 4 };
+}
+
 RECT App::GetGroupAddRect(const RECT& rowRect) const {
   return RECT{
     rowRect.right - kGroupClipboardWidth - kGroupAddWidth - 12,
@@ -1239,7 +1295,7 @@ RECT App::GetGroupAddRect(const RECT& rowRect) const {
 }
 
 RECT App::GetGroupClipboardRect(const RECT& rowRect) const {
-  return RECT{ rowRect.right - kGroupClipboardWidth - 8, rowRect.top + 4, rowRect.right - 8, rowRect.bottom - 4 };
+  return GetGroupOpenRect(rowRect);
 }
 
 void App::DrawListItem(const DRAWITEMSTRUCT* dis) {
@@ -1266,17 +1322,44 @@ void App::DrawListItem(const DRAWITEMSTRUCT* dis) {
   } else if (row.type == VisibleRow::Type::Group) {
     const NoteGroupConfig& group = notesConfig_.groups[row.groupIndex];
     const bool supportsNewNotes = group.type == NoteGroupType::Directory;
+    const bool supportsShowAll = group.type == NoteGroupType::TextLines && group.maxItems > 0 &&
+      row.groupIndex < static_cast<int>(showAllGroups_.size());
+    const bool showAllEnabled = supportsShowAll && showAllGroups_[row.groupIndex];
+    NoteFile sourceFile{};
+    const bool supportsOpen = group.type == NoteGroupType::TextLines &&
+      !group.defaultFileAction.empty() &&
+      BuildGroupSourceFile(group, sourceFile);
     RECT toggleRc = GetGroupToggleRect(rc);
+    RECT showAllRc = GetGroupShowAllRect(rc);
+    RECT openRc = GetGroupOpenRect(rc);
     RECT addRc = GetGroupAddRect(rc);
     RECT clipboardRc = GetGroupClipboardRect(rc);
     RECT textRc = rc;
     textRc.left += kGroupIndent + 14;
-    textRc.right = supportsNewNotes ? addRc.left - 8 : rc.right - 8;
+    if (supportsNewNotes) {
+      textRc.right = addRc.left - 8;
+    } else if (supportsShowAll) {
+      textRc.right = showAllRc.left - 8;
+    } else if (supportsOpen) {
+      textRc.right = openRc.left - 8;
+    } else {
+      textRc.right = rc.right - 8;
+    }
 
     SelectObject(dc, fontSymbol_);
     DrawTextW(dc, expandedGroups_[row.groupIndex] ? L"v" : L">", -1, &toggleRc, DT_SINGLELINE | DT_VCENTER | DT_CENTER);
     SelectObject(dc, fontGroup_);
     DrawTextW(dc, group.title.c_str(), -1, &textRc, DT_SINGLELINE | DT_VCENTER | DT_LEFT);
+    if (supportsShowAll) {
+      SelectObject(dc, fontMeta_);
+      SetTextColor(dc, showAllEnabled ? RGB(96, 104, 116) : RGB(64, 98, 160));
+      DrawTextW(dc, L"...", -1, &showAllRc, DT_SINGLELINE | DT_VCENTER | DT_CENTER);
+    }
+    if (supportsOpen) {
+      SelectObject(dc, fontMeta_);
+      SetTextColor(dc, RGB(64, 98, 160));
+      DrawTextW(dc, L"O", -1, &openRc, DT_SINGLELINE | DT_VCENTER | DT_CENTER);
+    }
     if (supportsNewNotes) {
       SelectObject(dc, fontMeta_);
       SetTextColor(dc, RGB(64, 98, 160));
@@ -1339,10 +1422,18 @@ void App::HandleListLeftClick(POINT pt) {
   if (row.type == VisibleRow::Type::Group) {
     const NoteGroupConfig& group = notesConfig_.groups[row.groupIndex];
     const bool supportsNewNotes = group.type == NoteGroupType::Directory;
+    const bool supportsShowAll = group.type == NoteGroupType::TextLines && group.maxItems > 0 &&
+      row.groupIndex < static_cast<int>(showAllGroups_.size());
+    RECT showAllRc = GetGroupShowAllRect(rowRect);
+    RECT openRc = GetGroupOpenRect(rowRect);
     RECT addRc = GetGroupAddRect(rowRect);
     RECT clipboardRc = GetGroupClipboardRect(rowRect);
     RECT toggleRc = GetGroupToggleRect(rowRect);
-    if (supportsNewNotes && PtInRect(&addRc, pt)) {
+    if (supportsShowAll && PtInRect(&showAllRc, pt)) {
+      ShowAllForGroup(row.groupIndex);
+    } else if (group.type == NoteGroupType::TextLines && PtInRect(&openRc, pt)) {
+      OpenGroupNote(row.groupIndex);
+    } else if (supportsNewNotes && PtInRect(&addRc, pt)) {
       CreateNoteForGroup(row.groupIndex);
     } else if (supportsNewNotes && PtInRect(&clipboardRc, pt)) {
       CreateNoteFromClipboardForGroup(row.groupIndex);
@@ -1358,16 +1449,20 @@ void App::HandleListLeftClick(POINT pt) {
 
 void App::HandleListRightClick(POINT pt) {
   int index = HitTestRow(pt);
-  if (index < 0) return;
-  const VisibleRow& row = visibleRows_[index];
-  if (row.type != VisibleRow::Type::Group && row.type != VisibleRow::Type::File) return;
-
   POINT screenPt = pt;
   ClientToScreen(listBox_, &screenPt);
+  if (index < 0) {
+    RunBlankMenu(screenPt);
+    return;
+  }
+
+  const VisibleRow& row = visibleRows_[index];
   if (row.type == VisibleRow::Type::Group) {
     RunGroupMenu(row.groupIndex, screenPt);
-  } else {
+  } else if (row.type == VisibleRow::Type::File) {
     RunFileMenu(row.groupIndex, row.fileIndex, screenPt);
+  } else {
+    RunBlankMenu(screenPt);
   }
 }
 
@@ -1375,6 +1470,63 @@ void App::ToggleGroup(int groupIndex) {
   if (groupIndex < 0 || groupIndex >= static_cast<int>(expandedGroups_.size())) return;
   expandedGroups_[groupIndex] = !expandedGroups_[groupIndex];
   RebuildVisibleRows();
+}
+
+void App::ShowAllForGroup(int groupIndex) {
+  if (groupIndex < 0 || groupIndex >= static_cast<int>(notesConfig_.groups.size())) return;
+  if (notesConfig_.groups[groupIndex].type != NoteGroupType::TextLines) return;
+  if (notesConfig_.groups[groupIndex].maxItems == 0) return;
+  if (groupIndex >= static_cast<int>(showAllGroups_.size())) return;
+  showAllGroups_[groupIndex] = !showAllGroups_[groupIndex];
+  RefreshGroup(groupIndex);
+}
+
+void App::OpenGroupNote(int groupIndex) {
+  if (groupIndex < 0 || groupIndex >= static_cast<int>(notesConfig_.groups.size())) return;
+  const NoteGroupConfig& group = notesConfig_.groups[groupIndex];
+  if (group.type != NoteGroupType::TextLines || group.defaultFileAction.empty()) return;
+  auto actionIt = notesConfig_.actions.find(group.defaultFileAction);
+  if (actionIt == notesConfig_.actions.end()) return;
+  NoteFile file{};
+  if (!BuildGroupSourceFile(group, file)) return;
+  if (!IsActionTargetCompatible(actionIt->second, &file)) return;
+  std::wstring errorMessage;
+  std::wstring command;
+  if (!ExecuteAction(actionIt->second, group, &file, &errorMessage, &command)) {
+    std::wstring message = L"Failed to run action:\n" + actionIt->second.title + L"\n\nCommand:\n" + command + L"\n\n" + errorMessage;
+    MessageBoxW(hwnd_, message.c_str(), L"MyBuddy", MB_OK | MB_ICONERROR);
+  }
+}
+
+void App::OpenConfigFile() {
+  auto actionIt = notesConfig_.actions.find(L"Edit");
+  if (actionIt == notesConfig_.actions.end()) {
+    actionIt = notesConfig_.actions.find(L"edit");
+  }
+  if (actionIt == notesConfig_.actions.end()) {
+    MessageBoxW(hwnd_, L"Opening config requires file_action.Edit.", L"MyBuddy", MB_OK | MB_ICONERROR);
+    return;
+  }
+
+  NoteFile configFile{};
+  configFile.path = currentConfigPath_.empty() ? GetFallbackConfigPath() : currentConfigPath_;
+  configFile.name = GetFileNameFromPath(configFile.path);
+  configFile.stem = GetFileStemFromName(configFile.name);
+  const size_t pos = configFile.path.find_last_of(L"\\/");
+  configFile.dir = pos == std::wstring::npos ? L"" : configFile.path.substr(0, pos);
+  configFile.displayName = configFile.name;
+
+  NoteGroupConfig pseudoGroup{};
+  pseudoGroup.id = L"config";
+  pseudoGroup.title = L"Config";
+  pseudoGroup.path = configFile.dir;
+
+  std::wstring errorMessage;
+  std::wstring command;
+  if (!ExecuteAction(actionIt->second, pseudoGroup, &configFile, &errorMessage, &command)) {
+    std::wstring message = L"Failed to run action:\n" + actionIt->second.title + L"\n\nCommand:\n" + command + L"\n\n" + errorMessage;
+    MessageBoxW(hwnd_, message.c_str(), L"MyBuddy", MB_OK | MB_ICONERROR);
+  }
 }
 
 void App::CreateNoteForGroup(int groupIndex) {
@@ -1489,47 +1641,95 @@ void App::OpenFileNote(int groupIndex, int fileIndex) {
 void App::RunGroupMenu(int groupIndex, POINT screenPt) {
   const NoteGroupConfig& group = notesConfig_.groups[groupIndex];
   const bool supportsNewNotes = group.type == NoteGroupType::Directory;
+  NoteFile sourceFile{};
+  const bool hasSourceFile = group.type == NoteGroupType::TextLines && BuildGroupSourceFile(group, sourceFile);
   HMENU menu = CreatePopupMenu();
   if (!menu) return;
   constexpr UINT kMenuNew = 4001;
   constexpr UINT kMenuNewFromClipboard = 4002;
   constexpr UINT kMenuRefresh = 4003;
+  constexpr UINT kMenuConfig = 4004;
   UINT nextActionId = 4100;
 
   if (supportsNewNotes) {
     AppendMenuW(menu, MF_STRING, kMenuNew, L"New Note");
     AppendMenuW(menu, MF_STRING, kMenuNewFromClipboard, L"New From Clipboard");
-  }
-  AppendMenuW(menu, MF_STRING, kMenuRefresh, L"Refresh");
-  if (!group.groupActions.empty()) {
+    AppendMenuW(menu, MF_STRING, kMenuRefresh, L"Refresh");
+    if (!group.groupActions.empty()) {
+      AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    }
+
+    std::unordered_map<UINT, std::wstring> actionIds;
+    for (const std::wstring& actionId : group.groupActions) {
+      auto it = notesConfig_.actions.find(actionId);
+      if (it == notesConfig_.actions.end()) continue;
+      if (!IsActionTargetCompatible(it->second, nullptr)) continue;
+      AppendMenuW(menu, MF_STRING, nextActionId, it->second.title.c_str());
+      actionIds[nextActionId] = actionId;
+      ++nextActionId;
+    }
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(menu, MF_STRING, kMenuConfig, L"Config");
+
+    SetForegroundWindow(hwnd_);
+    UINT cmd = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_LEFTALIGN | TPM_TOPALIGN,
+      screenPt.x, screenPt.y, 0, hwnd_, nullptr);
+    DestroyMenu(menu);
+
+    if (cmd == kMenuNew) {
+      CreateNoteForGroup(groupIndex);
+    } else if (cmd == kMenuNewFromClipboard) {
+      CreateNoteFromClipboardForGroup(groupIndex);
+    } else if (cmd == kMenuRefresh) {
+      ReloadConfigAndRefreshNotes();
+    } else if (cmd == kMenuConfig) {
+      OpenConfigFile();
+    } else if (auto it = actionIds.find(cmd); it != actionIds.end()) {
+      std::wstring errorMessage;
+      std::wstring command;
+      if (!ExecuteAction(notesConfig_.actions[it->second], group, nullptr, &errorMessage, &command)) {
+        std::wstring message = L"Failed to run action:\n" + notesConfig_.actions[it->second].title + L"\n\nCommand:\n" + command + L"\n\n" + errorMessage;
+        MessageBoxW(hwnd_, message.c_str(), L"MyBuddy", MB_OK | MB_ICONERROR);
+      }
+    }
+    return;
   }
 
   std::unordered_map<UINT, std::wstring> actionIds;
-  for (const std::wstring& actionId : group.groupActions) {
+  if (hasSourceFile && !group.defaultFileAction.empty()) {
+    auto it = notesConfig_.actions.find(group.defaultFileAction);
+    if (it != notesConfig_.actions.end() && IsActionTargetCompatible(it->second, &sourceFile)) {
+      AppendMenuW(menu, MF_STRING, nextActionId, it->second.title.c_str());
+      actionIds[nextActionId] = group.defaultFileAction;
+      ++nextActionId;
+    }
+  }
+  for (const std::wstring& actionId : group.fileActions) {
+    if (actionId == group.defaultFileAction) continue;
     auto it = notesConfig_.actions.find(actionId);
     if (it == notesConfig_.actions.end()) continue;
-    if (!IsActionTargetCompatible(it->second, nullptr)) continue;
+    if (!hasSourceFile || !IsActionTargetCompatible(it->second, &sourceFile)) continue;
     AppendMenuW(menu, MF_STRING, nextActionId, it->second.title.c_str());
     actionIds[nextActionId] = actionId;
     ++nextActionId;
   }
+  if (!actionIds.empty()) AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+  AppendMenuW(menu, MF_STRING, kMenuRefresh, L"Refresh");
+  AppendMenuW(menu, MF_STRING, kMenuConfig, L"Config");
 
   SetForegroundWindow(hwnd_);
   UINT cmd = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_LEFTALIGN | TPM_TOPALIGN,
     screenPt.x, screenPt.y, 0, hwnd_, nullptr);
   DestroyMenu(menu);
 
-  if (supportsNewNotes && cmd == kMenuNew) {
-    CreateNoteForGroup(groupIndex);
-  } else if (supportsNewNotes && cmd == kMenuNewFromClipboard) {
-    CreateNoteFromClipboardForGroup(groupIndex);
-  } else if (cmd == kMenuRefresh) {
+  if (cmd == kMenuRefresh) {
     ReloadConfigAndRefreshNotes();
+  } else if (cmd == kMenuConfig) {
+    OpenConfigFile();
   } else if (auto it = actionIds.find(cmd); it != actionIds.end()) {
     std::wstring errorMessage;
     std::wstring command;
-    if (!ExecuteAction(notesConfig_.actions[it->second], group, nullptr, &errorMessage, &command)) {
+    if (!ExecuteAction(notesConfig_.actions[it->second], group, &sourceFile, &errorMessage, &command)) {
       std::wstring message = L"Failed to run action:\n" + notesConfig_.actions[it->second].title + L"\n\nCommand:\n" + command + L"\n\n" + errorMessage;
       MessageBoxW(hwnd_, message.c_str(), L"MyBuddy", MB_OK | MB_ICONERROR);
     }
@@ -1541,8 +1741,9 @@ void App::RunFileMenu(int groupIndex, int fileIndex, POINT screenPt) {
   const NoteFile& file = notesByGroup_[groupIndex][fileIndex];
   HMENU menu = CreatePopupMenu();
   if (!menu) return;
+  constexpr UINT kMenuConfig = 5001;
 
-  UINT nextActionId = 5000;
+  UINT nextActionId = 5100;
   std::unordered_map<UINT, std::wstring> actionIds;
 
   if (!group.defaultFileAction.empty()) {
@@ -1568,18 +1769,42 @@ void App::RunFileMenu(int groupIndex, int fileIndex, POINT screenPt) {
     actionIds[nextActionId] = actionId;
     ++nextActionId;
   }
+  if (!actionIds.empty()) AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+  AppendMenuW(menu, MF_STRING, kMenuConfig, L"Config");
 
   SetForegroundWindow(hwnd_);
   UINT cmd = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_LEFTALIGN | TPM_TOPALIGN,
     screenPt.x, screenPt.y, 0, hwnd_, nullptr);
   DestroyMenu(menu);
-  if (auto it = actionIds.find(cmd); it != actionIds.end()) {
+  if (cmd == kMenuConfig) {
+    OpenConfigFile();
+  } else if (auto it = actionIds.find(cmd); it != actionIds.end()) {
     std::wstring errorMessage;
     std::wstring command;
     if (!ExecuteAction(notesConfig_.actions[it->second], group, &file, &errorMessage, &command)) {
       std::wstring message = L"Failed to run action:\n" + notesConfig_.actions[it->second].title + L"\n\nCommand:\n" + command + L"\n\n" + errorMessage;
       MessageBoxW(hwnd_, message.c_str(), L"MyBuddy", MB_OK | MB_ICONERROR);
     }
+  }
+}
+
+void App::RunBlankMenu(POINT screenPt) {
+  HMENU menu = CreatePopupMenu();
+  if (!menu) return;
+  constexpr UINT kMenuRefresh = 6001;
+  constexpr UINT kMenuConfig = 6002;
+  AppendMenuW(menu, MF_STRING, kMenuRefresh, L"Refresh");
+  AppendMenuW(menu, MF_STRING, kMenuConfig, L"Config");
+
+  SetForegroundWindow(hwnd_);
+  UINT cmd = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_LEFTALIGN | TPM_TOPALIGN,
+    screenPt.x, screenPt.y, 0, hwnd_, nullptr);
+  DestroyMenu(menu);
+
+  if (cmd == kMenuRefresh) {
+    ReloadConfigAndRefreshNotes();
+  } else if (cmd == kMenuConfig) {
+    OpenConfigFile();
   }
 }
 

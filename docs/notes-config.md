@@ -7,6 +7,7 @@ This document defines the `config.ini` format for the notes feature.
 - Each note group maps either to one directory or to one text file.
 - Directory groups use files as items.
 - `text` groups use non-empty lines in one text file as items.
+- If a `text` group points to a Markdown file and that file starts with TOML front matter, the front matter block is ignored.
 - Groups are shown together in one list.
 - Group headers are collapsible.
 - The add button belongs to the group header.
@@ -276,6 +277,7 @@ Optional keys:
 - Only files are included, not subdirectories.
 - First implementation should enumerate one directory level only.
 - `text` groups do not use `filePatterns`.
+- For Markdown source files, leading TOML front matter is skipped before line items are generated.
 
 ## Add Note Behavior
 

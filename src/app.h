@@ -94,14 +94,20 @@ private:
   int HitTestRow(POINT pt) const;
   RECT GetRowRect(int index) const;
   RECT GetGroupToggleRect(const RECT& rowRect) const;
+  RECT GetGroupShowAllRect(const RECT& rowRect) const;
+  RECT GetGroupOpenRect(const RECT& rowRect) const;
   RECT GetGroupAddRect(const RECT& rowRect) const;
   RECT GetGroupClipboardRect(const RECT& rowRect) const;
   void ToggleGroup(int groupIndex);
+  void ShowAllForGroup(int groupIndex);
+  void OpenGroupNote(int groupIndex);
+  void OpenConfigFile();
   void CreateNoteForGroup(int groupIndex);
   void CreateNoteFromClipboardForGroup(int groupIndex);
   void OpenFileNote(int groupIndex, int fileIndex);
   void RunGroupMenu(int groupIndex, POINT screenPt);
   void RunFileMenu(int groupIndex, int fileIndex, POINT screenPt);
+  void RunBlankMenu(POINT screenPt);
   void ReloadConfigAndRefreshNotes();
   void RefreshGroup(int groupIndex);
 
@@ -125,8 +131,10 @@ private:
   std::vector<std::vector<NoteFile>> notesByGroup_{};
   std::vector<NoteGroupLoadState> groupStates_{};
   std::vector<bool> expandedGroups_{};
+  std::vector<bool> showAllGroups_{};
   std::vector<VisibleRow> visibleRows_{};
   std::wstring globalStatusMessage_{};
+  std::wstring currentConfigPath_{};
   std::wstring hotKeySpec_ = L"Ctrl+Alt+B";
   UINT hotKeyModifiers_ = MOD_CONTROL | MOD_ALT;
   UINT hotKeyVk_ = 'B';
