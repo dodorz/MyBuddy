@@ -29,6 +29,7 @@ private:
     Left = 1,
     Right = 2,
     Top = 3,
+    Bottom = 4,
   };
 
   struct Animation {
@@ -61,6 +62,9 @@ private:
   void SetTaskbarVisible(bool visible);
   void CreateHotZoneWindow();
   void DestroyHotZoneWindow();
+  DockEdge GetTaskbarDockEdge() const;
+  DockEdge GetFallbackDockEdge() const;
+  DockEdge NormalizeDockEdge(DockEdge edge) const;
   RECT GetWorkArea() const;
   RECT GetExpandedRect() const;
   RECT GetCollapsedRect() const;

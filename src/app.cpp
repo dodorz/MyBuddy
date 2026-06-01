@@ -636,7 +636,7 @@ void App::SaveState() const {
 
 void App::InitializeDefaultState() {
   state_.version = 4;
-  state_.dockEdge = static_cast<int>(DockEdge::Right);
+  state_.dockEdge = static_cast<int>(GetFallbackDockEdge());
   RECT work = GetWorkArea();
   state_.w = 420;
   state_.h = 640;
@@ -721,10 +721,56 @@ RECT App::GetWorkArea() const {
   return info.rcWork;
 }
 
+App::DockEdge App::GetTaskbarDockEdge() const {
+  APPBARDATA abd{};
+  abd.cbSize = sizeof(abd);
+  abd.hWnd = FindWindowW(L"Shell_TrayWnd", nullptr);
+  if (!abd.hWnd || SHAppBarMessage(ABM_GETTASKBARPOS, &abd) == 0) {
+    return DockEdge::Bottom;
+  }
+
+  switch (abd.uEdge) {
+    case ABE_LEFT: return DockEdge::Left;
+    case ABE_RIGHT: return DockEdge::Right;
+    case ABE_TOP: return DockEdge::Top;
+    case ABE_BOTTOM:
+    default:
+      return DockEdge::Bottom;
+  }
+}
+
+App::DockEdge App::GetFallbackDockEdge() const {
+  switch (GetTaskbarDockEdge()) {
+    case DockEdge::Right:
+      return DockEdge::Left;
+    case DockEdge::Left:
+    case DockEdge::Top:
+    case DockEdge::Bottom:
+    case DockEdge::None:
+    default:
+      return DockEdge::Right;
+  }
+}
+
+App::DockEdge App::NormalizeDockEdge(DockEdge edge) const {
+  if (edge == DockEdge::None) return edge;
+  if (edge == GetTaskbarDockEdge()) {
+    return GetFallbackDockEdge();
+  }
+  return edge;
+}
+
 bool App::IsDocked() const {
-  return state_.dockEdge == static_cast<int>(DockEdge::Left) ||
-    state_.dockEdge == static_cast<int>(DockEdge::Right) ||
-    state_.dockEdge == static_cast<int>(DockEdge::Top);
+  switch (NormalizeDockEdge(static_cast<DockEdge>(state_.dockEdge))) {
+    case DockEdge::Left:
+    case DockEdge::Right:
+    case DockEdge::Top:
+    case DockEdge::Bottom:
+      return true;
+    case DockEdge::None:
+    default:
+      return false;
+  }
 }
 
 void App::UpdateDockEdgeFromRect(RECT& rect) {
@@ -734,13 +780,22 @@ void App::UpdateDockEdgeFromRect(RECT& rect) {
   const int leftDist = std::abs(rect.left - work.left);
   const int rightDist = std::abs(work.right - rect.right);
   const int topDist = std::abs(rect.top - work.top);
-  const int best = std::min({leftDist, rightDist, topDist});
+  const int bottomDist = std::abs(work.bottom - rect.bottom);
+  const DockEdge blocked = GetTaskbarDockEdge();
+  const int disabled = 0x3fffffff;
+  const int best = std::min({
+    blocked == DockEdge::Left ? disabled : leftDist,
+    blocked == DockEdge::Right ? disabled : rightDist,
+    blocked == DockEdge::Top ? disabled : topDist,
+    blocked == DockEdge::Bottom ? disabled : bottomDist
+  });
 
   DockEdge edge = DockEdge::None;
   if (best <= kSnapThresholdPx) {
-    if (best == leftDist) edge = DockEdge::Left;
-    else if (best == rightDist) edge = DockEdge::Right;
-    else edge = DockEdge::Top;
+    if (blocked != DockEdge::Left && best == leftDist) edge = DockEdge::Left;
+    else if (blocked != DockEdge::Right && best == rightDist) edge = DockEdge::Right;
+    else if (blocked != DockEdge::Top && best == topDist) edge = DockEdge::Top;
+    else if (blocked != DockEdge::Bottom && best == bottomDist) edge = DockEdge::Bottom;
   }
 
   state_.dockEdge = static_cast<int>(edge);
@@ -759,6 +814,11 @@ void App::UpdateDockEdgeFromRect(RECT& rect) {
     rect.bottom = rect.top + height;
     rect.left = std::max(work.left, std::min(rect.left, work.right - width));
     rect.right = rect.left + width;
+  } else if (edge == DockEdge::Bottom) {
+    rect.top = work.bottom - height;
+    rect.bottom = work.bottom;
+    rect.left = std::max(work.left, std::min(rect.left, work.right - width));
+    rect.right = rect.left + width;
   } else {
     rect.left = std::max(work.left, std::min(rect.left, work.right - width));
     rect.top = std::max(work.top, std::min(rect.top, work.bottom - height));
@@ -772,7 +832,7 @@ RECT App::GetExpandedRect() const {
   RECT rect{ state_.x, state_.y, state_.x + std::max(300, state_.w), state_.y + std::max(280, state_.h) };
   const int width = rect.right - rect.left;
   const int height = rect.bottom - rect.top;
-  const DockEdge edge = static_cast<DockEdge>(state_.dockEdge);
+  const DockEdge edge = NormalizeDockEdge(static_cast<DockEdge>(state_.dockEdge));
 
   if (edge == DockEdge::Left) {
     rect.left = work.left;
@@ -789,6 +849,11 @@ RECT App::GetExpandedRect() const {
     rect.bottom = rect.top + height;
     rect.left = std::max(work.left, std::min(rect.left, work.right - width));
     rect.right = rect.left + width;
+  } else if (edge == DockEdge::Bottom) {
+    rect.top = work.bottom - height;
+    rect.bottom = work.bottom;
+    rect.left = std::max(work.left, std::min(rect.left, work.right - width));
+    rect.right = rect.left + width;
   } else {
     rect.left = std::max(work.left, std::min(rect.left, work.right - width));
     rect.top = std::max(work.top, std::min(rect.top, work.bottom - height));
@@ -802,7 +867,7 @@ RECT App::GetCollapsedRect() const {
   RECT rect = GetExpandedRect();
   const int width = rect.right - rect.left;
   const int height = rect.bottom - rect.top;
-  switch (static_cast<DockEdge>(state_.dockEdge)) {
+  switch (NormalizeDockEdge(static_cast<DockEdge>(state_.dockEdge))) {
     case DockEdge::Left:
       rect.left -= width;
       rect.right = rect.left + width;
@@ -815,6 +880,10 @@ RECT App::GetCollapsedRect() const {
       rect.top -= height;
       rect.bottom = rect.top + height;
       break;
+    case DockEdge::Bottom:
+      rect.top += height;
+      rect.bottom = rect.top + height;
+      break;
     case DockEdge::None:
     default:
       break;
@@ -824,13 +893,15 @@ RECT App::GetCollapsedRect() const {
 
 RECT App::GetHotZoneRect() const {
   RECT work = GetWorkArea();
-  switch (static_cast<DockEdge>(state_.dockEdge)) {
+  switch (NormalizeDockEdge(static_cast<DockEdge>(state_.dockEdge))) {
     case DockEdge::Left:
       return RECT{ work.left, work.top, work.left + kHotZoneThicknessPx, work.bottom };
     case DockEdge::Right:
       return RECT{ work.right - kHotZoneThicknessPx, work.top, work.right, work.bottom };
     case DockEdge::Top:
       return RECT{ work.left, work.top, work.right, work.top + kHotZoneThicknessPx };
+    case DockEdge::Bottom:
+      return RECT{ work.left, work.bottom - kHotZoneThicknessPx, work.right, work.bottom };
     case DockEdge::None:
     default:
       return RECT{ 0, 0, 0, 0 };
@@ -998,6 +1069,7 @@ void App::ApplySavedGeometry() {
   state_.version = 4;
   if (state_.w <= 0) state_.w = 420;
   if (state_.h <= 0) state_.h = 640;
+  state_.dockEdge = static_cast<int>(NormalizeDockEdge(static_cast<DockEdge>(state_.dockEdge)));
   RECT rect = GetExpandedRect();
   CommitVisibleRect(rect, true);
   RECT target = state_.expanded && !trayHidden_ ? GetExpandedRect() : GetCollapsedRect();
