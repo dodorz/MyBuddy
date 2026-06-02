@@ -149,21 +149,43 @@ struct MarkdownCheckbox {
   };
 
   State state = State::None;
+  std::wstring indent;
   std::wstring label;
 };
 
+std::wstring ExpandTabsForDisplay(const std::wstring& text, int tabWidth = 4) {
+  std::wstring expanded;
+  int column = 0;
+  for (wchar_t ch : text) {
+    if (ch == L'\t') {
+      const int spaces = tabWidth - (column % tabWidth);
+      expanded.append(spaces, L' ');
+      column += spaces;
+    } else {
+      expanded.push_back(ch);
+      ++column;
+    }
+  }
+  return expanded;
+}
+
 MarkdownCheckbox ParseMarkdownCheckbox(const std::wstring& text) {
   MarkdownCheckbox checkbox{};
+  size_t start = 0;
+  while (start < text.size() && (text[start] == L' ' || text[start] == L'\t')) ++start;
+  checkbox.indent = text.substr(0, start);
+
+  const std::wstring body = text.substr(start);
   auto parse = [&](wchar_t marker, MarkdownCheckbox::State state) -> bool {
-    if (text.size() < 5) return false;
-    if (text[0] != L'-' || text[1] != L' ' || text[2] != L'[' || text[3] != marker || text[4] != L']') {
+    if (body.size() < 5) return false;
+    if (body[0] != L'-' || body[1] != L' ' || body[2] != L'[' || body[3] != marker || body[4] != L']') {
       return false;
     }
     checkbox.state = state;
-    if (text.size() == 5) {
+    if (body.size() == 5) {
       checkbox.label.clear();
-    } else if (text.size() >= 6 && text[5] == L' ') {
-      checkbox.label = text.substr(6);
+    } else if (body.size() >= 6 && body[5] == L' ') {
+      checkbox.label = body.substr(6);
     } else {
       checkbox.state = MarkdownCheckbox::State::None;
       return false;
@@ -1471,10 +1493,11 @@ void App::DrawListItem(const DRAWITEMSTRUCT* dis) {
       nameRc.right = timeRc.right - 32;
       MarkdownCheckbox checkbox = ParseMarkdownCheckbox(displayName);
       if (checkbox.state == MarkdownCheckbox::State::None) {
-        DrawTextW(dc, displayName.c_str(), -1, &nameRc, DT_SINGLELINE | DT_VCENTER | DT_LEFT | DT_END_ELLIPSIS);
+        DrawTextW(dc, displayName.c_str(), -1, &nameRc, DT_SINGLELINE | DT_VCENTER | DT_LEFT | DT_END_ELLIPSIS | DT_EXPANDTABS);
       } else {
+        const int indentWidth = MeasureTextWidth(dc, ExpandTabsForDisplay(checkbox.indent));
         RECT boxRc{};
-        boxRc.left = nameRc.left;
+        boxRc.left = nameRc.left + indentWidth;
         boxRc.top = rc.top + ((rc.bottom - rc.top) - 13) / 2;
         boxRc.right = boxRc.left + 13;
         boxRc.bottom = boxRc.top + 13;

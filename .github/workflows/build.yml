@@ -44,8 +44,10 @@ jobs:
           if (-not $tag) {
             throw "Resolved version is empty"
           }
-          if ($tag.StartsWith("v")) { $tag = $tag.Substring(1) }
-          "version=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          $version = $tag
+          if ($version.StartsWith("v")) { $version = $version.Substring(1) }
+          "tag=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
       - name: Configure
         run: cmake -S . -B build\vs2026 -G "Visual Studio 18 2026" -A x64
@@ -83,10 +85,10 @@ jobs:
         id: release_notes
         shell: pwsh
         run: |
-          $currentTag = "v${{ steps.version.outputs.version }}"
+          $currentTag = "${{ steps.version.outputs.tag }}"
           $previousTag = ""
           try {
-            $previousTag = (git describe --tags --abbrev=0 "$currentTag^" 2>$null).Trim()
+            $previousTag = (git describe --tags --abbrev=0 HEAD^ 2>$null).Trim()
           } catch {
             $previousTag = ""
           }
@@ -95,11 +97,11 @@ jobs:
           if ($previousTag) {
             $lines += "Changes since $previousTag"
             $lines += ""
-            $commitLines = git log "$previousTag..$currentTag" --pretty=format:"- %s"
+            $commitLines = git log "$previousTag..HEAD" --pretty=format:"- %s"
           } else {
-            $lines += "Changes"
+            $lines += "Changes in $currentTag"
             $lines += ""
-            $commitLines = git log "$currentTag" --pretty=format:"- %s"
+            $commitLines = git log HEAD --pretty=format:"- %s"
           }
 
           if ($commitLines) {
@@ -116,7 +118,7 @@ jobs:
         if: github.event_name == 'push'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ steps.version.outputs.version }}
+          tag_name: ${{ steps.version.outputs.tag }}
           name: MyBuddy v${{ steps.version.outputs.version }}
           body_path: ${{ steps.release_notes.outputs.path }}
           files: |

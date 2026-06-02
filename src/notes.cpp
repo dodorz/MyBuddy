@@ -162,6 +162,13 @@ std::wstring Trim(std::wstring value) {
   return value.substr(start, end - start);
 }
 
+std::wstring TrimRight(std::wstring value) {
+  size_t end = value.size();
+  while (end > 0 && iswspace(value[end - 1])) --end;
+  value.resize(end);
+  return value;
+}
+
 std::wstring StripMdHeading(std::wstring value) {
   value = Trim(value);
   size_t i = 0;
@@ -668,8 +675,8 @@ void LoadNoteFiles(const NoteGroupConfig& group, std::vector<NoteFile>& files, N
       TryFindTomlFrontMatter(lines, contentStart);
     }
     for (size_t i = contentStart; i < lines.size(); ++i) {
-      std::wstring text = Trim(lines[i]);
-      if (text.empty()) continue;
+      if (Trim(lines[i]).empty()) continue;
+      std::wstring text = TrimRight(lines[i]);
 
       NoteFile file{};
       file.path = group.path;
