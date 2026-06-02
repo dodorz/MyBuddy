@@ -9,6 +9,32 @@
 ; Default: Ctrl+Alt+B
 globalHotKey=Ctrl+Alt+B
 
+[toolbar]
+; Optional top toolbar buttons, in display order, separated by ';'.
+; If omitted, all [toolbar_button.*] sections are auto-discovered.
+; Allowed icon values in this version: touch, proxy
+; icon uses built-in button glyph names, not icon file paths.
+; Allowed scope values: global, group, file
+; buttons=touchNote;proxyCheck
+
+[toolbar_button.touchNote]
+; Shown in tooltip.
+; title=Touch
+; Allowed icon values in this version: touch, proxy
+; icon=touch
+; file scope means the command runs against the current file item.
+; scope=file
+; Example: update modified time so the current note rises to the top in mtime sort.
+; command=C:\Tools\touch-note.cmd "{file}"
+
+[toolbar_button.proxyCheck]
+; title=Proxy
+; icon=proxy
+; global scope means the command does not require a selected note item.
+; scope=global
+; Example: run your proxy test-and-switch script.
+; command=C:\Tools\check-and-switch-proxy.cmd
+
 [notes_default]
 ; New notes are first created as temporary drafts, then renamed from content
 ; after the editor exits.

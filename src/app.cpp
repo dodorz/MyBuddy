@@ -3,6 +3,7 @@
 #include "resource.h"
 #include "state.h"
 
+#include <commctrl.h>
 #include <shellapi.h>
 #include <shlobj.h>
 #include <windowsx.h>
@@ -24,6 +25,10 @@ constexpr int kFileIndent = 28;
 constexpr int kGroupButtonWidth = 32;
 constexpr int kGroupAddWidth = 32;
 constexpr int kGroupClipboardWidth = 32;
+constexpr UINT kToolbarButtonBaseId = 7000;
+constexpr int kToolbarHeightPx = 32;
+constexpr int kToolbarButtonSizePx = 24;
+constexpr int kToolbarPaddingPx = 4;
 constexpr wchar_t kMainClass[] = L"MyBuddyMainClass";
 constexpr wchar_t kHotZoneClass[] = L"MyBuddyHotZoneClass";
 constexpr wchar_t kSingleInstanceMutexName[] = L"Local\\MyBuddy.SingleInstance";
@@ -57,6 +62,42 @@ std::wstring Trim(std::wstring value) {
 std::wstring ToUpper(std::wstring value) {
   std::transform(value.begin(), value.end(), value.begin(), towupper);
   return value;
+}
+
+std::wstring ToLower(std::wstring value) {
+  std::transform(value.begin(), value.end(), value.begin(), towlower);
+  return value;
+}
+
+std::vector<std::wstring> SplitSemicolonList(const std::wstring& value) {
+  std::vector<std::wstring> parts;
+  std::wstring current;
+  for (wchar_t ch : value) {
+    if (ch == L';') {
+      std::wstring token = Trim(current);
+      if (!token.empty()) parts.push_back(token);
+      current.clear();
+      continue;
+    }
+    current.push_back(ch);
+  }
+  std::wstring token = Trim(current);
+  if (!token.empty()) parts.push_back(token);
+  return parts;
+}
+
+std::vector<std::wstring> ReadIniSectionNames(const std::wstring& path) {
+  std::vector<std::wstring> sections;
+  std::vector<wchar_t> buffer(65536);
+  DWORD len = GetPrivateProfileSectionNamesW(buffer.data(), static_cast<DWORD>(buffer.size()), path.c_str());
+  if (len == 0) return sections;
+
+  const wchar_t* ptr = buffer.data();
+  while (*ptr) {
+    sections.emplace_back(ptr);
+    ptr += wcslen(ptr) + 1;
+  }
+  return sections;
 }
 
 std::vector<std::wstring> SplitHotKeySpec(const std::wstring& spec) {
@@ -139,6 +180,71 @@ std::wstring GetFileNameFromPath(const std::wstring& path) {
 std::wstring GetFileStemFromName(const std::wstring& name) {
   const size_t pos = name.find_last_of(L'.');
   return pos == std::wstring::npos ? name : name.substr(0, pos);
+}
+
+App::ToolbarScope ParseToolbarScope(const std::wstring& value) {
+  const std::wstring normalized = ToLower(Trim(value));
+  if (normalized == L"group") return App::ToolbarScope::Group;
+  if (normalized == L"file" || normalized == L"selection") return App::ToolbarScope::File;
+  return App::ToolbarScope::Global;
+}
+
+bool IsSupportedToolbarIcon(const std::wstring& value) {
+  const std::wstring normalized = ToLower(Trim(value));
+  return normalized == L"touch" || normalized == L"proxy";
+}
+
+void DrawTouchToolbarIcon(HDC dc, const RECT& rc, COLORREF color) {
+  HPEN pen = CreatePen(PS_SOLID, 2, color);
+  HGDIOBJ oldPen = SelectObject(dc, pen);
+  HGDIOBJ oldBrush = SelectObject(dc, GetStockObject(HOLLOW_BRUSH));
+
+  Rectangle(dc, rc.left + 3, rc.top + 2, rc.left + 11, rc.top + 13);
+  MoveToEx(dc, rc.left + 8, rc.top + 2, nullptr);
+  LineTo(dc, rc.left + 11, rc.top + 5);
+  MoveToEx(dc, rc.left + 8, rc.top + 2, nullptr);
+  LineTo(dc, rc.left + 8, rc.top + 5);
+  MoveToEx(dc, rc.left + 8, rc.top + 5, nullptr);
+  LineTo(dc, rc.left + 11, rc.top + 5);
+
+  MoveToEx(dc, rc.left + 12, rc.top + 12, nullptr);
+  LineTo(dc, rc.left + 12, rc.top + 6);
+  MoveToEx(dc, rc.left + 9, rc.top + 9, nullptr);
+  LineTo(dc, rc.left + 12, rc.top + 6);
+  LineTo(dc, rc.left + 15, rc.top + 9);
+
+  SelectObject(dc, oldBrush);
+  SelectObject(dc, oldPen);
+  DeleteObject(pen);
+}
+
+void DrawProxyToolbarIcon(HDC dc, const RECT& rc, COLORREF color) {
+  HPEN pen = CreatePen(PS_SOLID, 2, color);
+  HBRUSH brush = CreateSolidBrush(color);
+  HGDIOBJ oldPen = SelectObject(dc, pen);
+  HGDIOBJ oldBrush = SelectObject(dc, brush);
+
+  Ellipse(dc, rc.left + 2, rc.top + 6, rc.left + 6, rc.top + 10);
+  Ellipse(dc, rc.left + 12, rc.top + 6, rc.left + 16, rc.top + 10);
+  MoveToEx(dc, rc.left + 6, rc.top + 8, nullptr);
+  LineTo(dc, rc.left + 12, rc.top + 8);
+
+  SelectObject(dc, GetStockObject(HOLLOW_BRUSH));
+  Arc(dc, rc.left + 4, rc.top + 2, rc.left + 14, rc.top + 12, rc.left + 8, rc.top + 2, rc.left + 12, rc.top + 6);
+  Arc(dc, rc.left + 4, rc.top + 6, rc.left + 14, rc.top + 16, rc.left + 12, rc.top + 16, rc.left + 8, rc.top + 12);
+  MoveToEx(dc, rc.left + 12, rc.top + 6, nullptr);
+  LineTo(dc, rc.left + 10, rc.top + 4);
+  MoveToEx(dc, rc.left + 12, rc.top + 6, nullptr);
+  LineTo(dc, rc.left + 10, rc.top + 6);
+  MoveToEx(dc, rc.left + 8, rc.top + 12, nullptr);
+  LineTo(dc, rc.left + 10, rc.top + 12);
+  MoveToEx(dc, rc.left + 8, rc.top + 12, nullptr);
+  LineTo(dc, rc.left + 10, rc.top + 14);
+
+  SelectObject(dc, oldBrush);
+  SelectObject(dc, oldPen);
+  DeleteObject(brush);
+  DeleteObject(pen);
 }
 
 struct MarkdownCheckbox {
@@ -455,6 +561,8 @@ auto FindNewNoteEditAction(const NotesConfig& config) {
 
 int App::Run(HINSTANCE instance, int showCmd) {
   instance_ = instance;
+  INITCOMMONCONTROLSEX icc{ sizeof(icc), ICC_WIN95_CLASSES };
+  InitCommonControlsEx(&icc);
   singleInstanceMutex_ = CreateMutexW(nullptr, TRUE, kSingleInstanceMutexName);
   if (!singleInstanceMutex_) return 0;
   if (GetLastError() == ERROR_ALREADY_EXISTS) {
@@ -590,9 +698,19 @@ LRESULT App::HandleMainMessage(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         DrawListItem(reinterpret_cast<DRAWITEMSTRUCT*>(lp));
         return TRUE;
       }
+      if (wp >= kToolbarButtonBaseId && wp < kToolbarButtonBaseId + toolbarButtons_.size()) {
+        DrawToolbarButton(reinterpret_cast<DRAWITEMSTRUCT*>(lp));
+        return TRUE;
+      }
       return FALSE;
     case WM_COMMAND:
-      if (LOWORD(wp) == kTrayOpenCmd) {
+      if (LOWORD(wp) == 1 && HIWORD(wp) == LBN_SELCHANGE) {
+        currentRowIndex_ = GetCurrentRowIndex();
+        UpdateToolbarButtons();
+      } else if (LOWORD(wp) >= kToolbarButtonBaseId && LOWORD(wp) < kToolbarButtonBaseId + toolbarButtons_.size() &&
+                 HIWORD(wp) == BN_CLICKED) {
+        RunToolbarButton(LOWORD(wp) - kToolbarButtonBaseId);
+      } else if (LOWORD(wp) == kTrayOpenCmd) {
         if (IsDocked()) {
           RequestExpand(true);
         } else {
@@ -672,6 +790,7 @@ LRESULT App::HandleMainMessage(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         CloseHandle(singleInstanceMutex_);
         singleInstanceMutex_ = nullptr;
       }
+      DestroyToolbarButtons();
       DestroyFonts();
       PostQuitMessage(0);
       return 0;
@@ -740,11 +859,38 @@ bool App::LoadConfig() {
     hotKeyVk_ = 'B';
   }
 
+  std::vector<ToolbarButtonConfig> loadedToolbarButtons;
+  std::vector<std::wstring> toolbarButtonIds = SplitSemicolonList(ReadIniString(path, L"toolbar", L"buttons"));
+  if (toolbarButtonIds.empty()) {
+    for (const std::wstring& section : ReadIniSectionNames(path)) {
+      if (section.rfind(L"toolbar_button.", 0) == 0 && section.size() > 15) {
+        toolbarButtonIds.push_back(section.substr(15));
+      }
+    }
+  }
+  for (const std::wstring& buttonId : toolbarButtonIds) {
+    const std::wstring section = L"toolbar_button." + buttonId;
+    ToolbarButtonConfig button{};
+    button.id = buttonId;
+    button.title = ReadIniString(path, section.c_str(), L"title", buttonId.c_str());
+    button.icon = ToLower(ReadIniString(path, section.c_str(), L"icon"));
+    button.command = ReadIniString(path, section.c_str(), L"command");
+    button.scope = ParseToolbarScope(ReadIniString(path, section.c_str(), L"scope", L"global"));
+    if (button.command.empty() || !IsSupportedToolbarIcon(button.icon)) continue;
+    loadedToolbarButtons.push_back(std::move(button));
+  }
+  toolbarButtons_ = std::move(loadedToolbarButtons);
+
   NotesConfig loadedNotesConfig{};
   if (LoadNotesConfig(path, loadedNotesConfig)) {
     notesConfig_ = std::move(loadedNotesConfig);
   } else {
     notesConfig_ = NotesConfig{};
+  }
+  if (hwnd_ && listBox_) {
+    CreateToolbarButtons();
+    LayoutControls();
+    UpdateToolbarButtons();
   }
   return true;
 }
@@ -1220,6 +1366,58 @@ void App::CreateControls() {
   SendMessageW(listBox_, WM_SETFONT, reinterpret_cast<WPARAM>(fontBody_), TRUE);
   SetWindowLongPtrW(listBox_, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(this));
   originalListBoxProc_ = reinterpret_cast<WNDPROC>(SetWindowLongPtrW(listBox_, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(App::ListBoxProc)));
+  CreateToolbarButtons();
+}
+
+void App::DestroyToolbarButtons() {
+  for (ToolbarButtonConfig& button : toolbarButtons_) {
+    if (button.hwnd) {
+      DestroyWindow(button.hwnd);
+      button.hwnd = nullptr;
+    }
+  }
+  if (toolbarTooltip_) {
+    DestroyWindow(toolbarTooltip_);
+    toolbarTooltip_ = nullptr;
+  }
+}
+
+void App::CreateToolbarButtons() {
+  DestroyToolbarButtons();
+  if (toolbarButtons_.empty()) return;
+
+  toolbarTooltip_ = CreateWindowExW(WS_EX_TOPMOST, TOOLTIPS_CLASSW, nullptr,
+    WS_POPUP | TTS_ALWAYSTIP | TTS_NOPREFIX,
+    CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT,
+    hwnd_, nullptr, instance_, nullptr);
+  if (toolbarTooltip_) {
+    SetWindowPos(toolbarTooltip_, HWND_TOPMOST, 0, 0, 0, 0,
+      SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+  }
+
+  for (size_t i = 0; i < toolbarButtons_.size(); ++i) {
+    ToolbarButtonConfig& button = toolbarButtons_[i];
+    button.hwnd = CreateWindowExW(
+      0,
+      L"BUTTON",
+      button.title.c_str(),
+      WS_CHILD | WS_VISIBLE | BS_OWNERDRAW | WS_TABSTOP,
+      0, 0, 0, 0,
+      hwnd_,
+      reinterpret_cast<HMENU>(static_cast<INT_PTR>(kToolbarButtonBaseId + i)),
+      instance_,
+      nullptr);
+
+    if (toolbarTooltip_ && button.hwnd) {
+      TOOLINFOW ti{};
+      ti.cbSize = sizeof(ti);
+      ti.uFlags = TTF_SUBCLASS | TTF_IDISHWND;
+      ti.hwnd = hwnd_;
+      ti.uId = reinterpret_cast<UINT_PTR>(button.hwnd);
+      ti.lpszText = const_cast<LPWSTR>(button.title.c_str());
+      SendMessageW(toolbarTooltip_, TTM_ADDTOOLW, 0, reinterpret_cast<LPARAM>(&ti));
+    }
+  }
 }
 
 void App::CreateFonts() {
@@ -1260,8 +1458,18 @@ void App::DestroyFonts() {
 void App::LayoutControls() {
   RECT rc{};
   GetClientRect(hwnd_, &rc);
+  const int toolbarHeight = toolbarButtons_.empty() ? 0 : kToolbarHeightPx;
+  int buttonX = kToolbarPaddingPx;
+  for (ToolbarButtonConfig& button : toolbarButtons_) {
+    if (!button.hwnd) continue;
+    MoveWindow(button.hwnd, buttonX, kToolbarPaddingPx,
+      kToolbarButtonSizePx, kToolbarButtonSizePx, TRUE);
+    buttonX += kToolbarButtonSizePx + kToolbarPaddingPx;
+  }
   if (listBox_) {
-    MoveWindow(listBox_, 0, 0, rc.right - rc.left, rc.bottom - rc.top, TRUE);
+    const int listWidth = static_cast<int>(rc.right - rc.left);
+    const int listHeight = std::max(0, static_cast<int>(rc.bottom - rc.top) - toolbarHeight);
+    MoveWindow(listBox_, 0, toolbarHeight, listWidth, listHeight, TRUE);
     RedrawWindow(listBox_, nullptr, nullptr, RDW_ERASE | RDW_INVALIDATE | RDW_UPDATENOW);
   }
 }
@@ -1354,9 +1562,15 @@ void App::RebuildVisibleRows() {
   if (!visibleRows_.empty()) {
     topIndex = std::clamp(topIndex, 0, static_cast<int>(visibleRows_.size()) - 1);
     SendMessageW(listBox_, LB_SETTOPINDEX, static_cast<WPARAM>(topIndex), 0);
+    if (currentRowIndex_ >= static_cast<int>(visibleRows_.size())) {
+      currentRowIndex_ = static_cast<int>(visibleRows_.size()) - 1;
+    }
+  } else {
+    currentRowIndex_ = -1;
   }
   SendMessageW(listBox_, WM_SETREDRAW, TRUE, 0);
   InvalidateList();
+  UpdateToolbarButtons();
 }
 
 void App::InvalidateList() {
@@ -1542,6 +1756,159 @@ void App::DrawListItem(const DRAWITEMSTRUCT* dis) {
   SelectObject(dc, oldFont);
 }
 
+void App::DrawToolbarButton(const DRAWITEMSTRUCT* dis) {
+  const size_t index = static_cast<size_t>(dis->CtlID - kToolbarButtonBaseId);
+  if (index >= toolbarButtons_.size()) return;
+
+  const ToolbarButtonConfig& button = toolbarButtons_[index];
+  HDC dc = dis->hDC;
+  RECT rc = dis->rcItem;
+
+  const bool selected = (dis->itemState & ODS_SELECTED) != 0;
+  const bool disabled = (dis->itemState & ODS_DISABLED) != 0;
+  const COLORREF bg = selected ? RGB(228, 234, 242) : RGB(245, 247, 250);
+  const COLORREF border = selected ? RGB(120, 132, 148) : RGB(214, 220, 228);
+  const COLORREF iconColor = disabled ? RGB(164, 170, 178) : RGB(52, 76, 112);
+
+  HBRUSH bgBrush = CreateSolidBrush(bg);
+  FillRect(dc, &rc, bgBrush);
+  DeleteObject(bgBrush);
+
+  HPEN borderPen = CreatePen(PS_SOLID, 1, border);
+  HGDIOBJ oldPen = SelectObject(dc, borderPen);
+  HGDIOBJ oldBrush = SelectObject(dc, GetStockObject(HOLLOW_BRUSH));
+  Rectangle(dc, rc.left, rc.top, rc.right, rc.bottom);
+  SelectObject(dc, oldBrush);
+  SelectObject(dc, oldPen);
+  DeleteObject(borderPen);
+
+  RECT iconRc = rc;
+  iconRc.left += 3;
+  iconRc.top += 3;
+  iconRc.right -= 3;
+  iconRc.bottom -= 3;
+
+  if (button.icon == L"touch") {
+    DrawTouchToolbarIcon(dc, iconRc, iconColor);
+  } else if (button.icon == L"proxy") {
+    DrawProxyToolbarIcon(dc, iconRc, iconColor);
+  }
+
+  if (dis->itemState & ODS_FOCUS) {
+    RECT focusRc = rc;
+    InflateRect(&focusRc, -3, -3);
+    DrawFocusRect(dc, &focusRc);
+  }
+}
+
+int App::GetCurrentRowIndex() const {
+  if (currentRowIndex_ >= 0 && currentRowIndex_ < static_cast<int>(visibleRows_.size())) {
+    return currentRowIndex_;
+  }
+  if (!listBox_) return -1;
+  LRESULT result = SendMessageW(listBox_, LB_GETCURSEL, 0, 0);
+  if (result == LB_ERR) return -1;
+  int index = static_cast<int>(result);
+  return index >= 0 && index < static_cast<int>(visibleRows_.size()) ? index : -1;
+}
+
+bool App::ResolveToolbarContext(const ToolbarButtonConfig& button, int& groupIndex, NoteGroupConfig& group,
+  NoteFile& file, const NoteFile*& filePtr) const {
+  groupIndex = -1;
+  file = NoteFile{};
+  filePtr = nullptr;
+
+  if (button.scope == ToolbarScope::Global) {
+    group = NoteGroupConfig{};
+    return true;
+  }
+
+  const int rowIndex = GetCurrentRowIndex();
+  if (rowIndex < 0 || rowIndex >= static_cast<int>(visibleRows_.size())) return false;
+  const VisibleRow& row = visibleRows_[rowIndex];
+  if (row.type == VisibleRow::Type::GlobalMessage) return false;
+
+  groupIndex = row.groupIndex;
+  if (groupIndex < 0 || groupIndex >= static_cast<int>(notesConfig_.groups.size())) return false;
+  group = notesConfig_.groups[groupIndex];
+
+  if (button.scope == ToolbarScope::Group) {
+    return true;
+  }
+
+  if (row.type == VisibleRow::Type::File) {
+    file = notesByGroup_[row.groupIndex][row.fileIndex];
+    filePtr = &file;
+    return true;
+  }
+
+  if (group.type == NoteGroupType::TextLines && BuildGroupSourceFile(group, file)) {
+    filePtr = &file;
+    return true;
+  }
+
+  return false;
+}
+
+void App::UpdateToolbarButtons() {
+  for (ToolbarButtonConfig& button : toolbarButtons_) {
+    if (!button.hwnd) continue;
+    if (button.scope == ToolbarScope::Global) {
+      EnableWindow(button.hwnd, TRUE);
+      continue;
+    }
+
+    int groupIndex = -1;
+    NoteGroupConfig group{};
+    NoteFile file{};
+    const NoteFile* filePtr = nullptr;
+    EnableWindow(button.hwnd, ResolveToolbarContext(button, groupIndex, group, file, filePtr) ? TRUE : FALSE);
+  }
+}
+
+void App::RunToolbarButton(size_t index) {
+  if (index >= toolbarButtons_.size()) return;
+  const ToolbarButtonConfig& button = toolbarButtons_[index];
+
+  if (button.command == L":refresh") {
+    ReloadConfigAndRefreshNotes();
+    return;
+  }
+  if (button.command == L":config") {
+    OpenConfigFile();
+    return;
+  }
+
+  int groupIndex = -1;
+  NoteGroupConfig group{};
+  NoteFile file{};
+  const NoteFile* filePtr = nullptr;
+  if (!ResolveToolbarContext(button, groupIndex, group, file, filePtr)) return;
+
+  ActionConfig action{};
+  action.id = button.id;
+  action.title = button.title;
+  action.command = button.command;
+  action.target = filePtr ? ActionTarget::File : ActionTarget::Directory;
+
+  std::wstring errorMessage;
+  std::wstring command;
+  const bool shouldWait = button.scope != ToolbarScope::Global;
+  const bool ok = shouldWait
+    ? ExecuteActionAndWait(action, group, filePtr, &errorMessage, &command)
+    : ExecuteAction(action, group, filePtr, &errorMessage, &command);
+  if (!ok) {
+    std::wstring message = L"Failed to run toolbar command:\n" + button.title + L"\n\nCommand:\n" +
+      command + L"\n\n" + errorMessage;
+    MessageBoxW(hwnd_, message.c_str(), L"MyBuddy", MB_OK | MB_ICONERROR);
+    return;
+  }
+
+  if (shouldWait && groupIndex >= 0) {
+    RefreshGroup(groupIndex);
+  }
+}
+
 int App::HitTestRow(POINT pt) const {
   LRESULT hit = SendMessageW(listBox_, LB_ITEMFROMPOINT, 0, MAKELPARAM(pt.x, pt.y));
   if (HIWORD(hit) != 0) return -1;
@@ -1553,6 +1920,8 @@ int App::HitTestRow(POINT pt) const {
 void App::HandleListLeftClick(POINT pt) {
   int index = HitTestRow(pt);
   if (index < 0) return;
+  currentRowIndex_ = index;
+  UpdateToolbarButtons();
 
   const VisibleRow& row = visibleRows_[index];
   RECT rowRect = GetRowRect(index);
@@ -1592,6 +1961,9 @@ void App::HandleListRightClick(POINT pt) {
     RunBlankMenu(screenPt);
     return;
   }
+
+  currentRowIndex_ = index;
+  UpdateToolbarButtons();
 
   const VisibleRow& row = visibleRows_[index];
   if (row.type == VisibleRow::Type::Group) {

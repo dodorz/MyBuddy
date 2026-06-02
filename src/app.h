@@ -21,6 +21,21 @@ struct AppState {
 
 class App {
 public:
+  enum class ToolbarScope {
+    Global,
+    Group,
+    File,
+  };
+
+  struct ToolbarButtonConfig {
+    std::wstring id;
+    std::wstring title;
+    std::wstring icon;
+    std::wstring command;
+    ToolbarScope scope = ToolbarScope::Global;
+    HWND hwnd = nullptr;
+  };
+
   int Run(HINSTANCE instance, int showCmd);
 
 private:
@@ -82,6 +97,8 @@ private:
   void PollAutoHide();
 
   void CreateControls();
+  void CreateToolbarButtons();
+  void DestroyToolbarButtons();
   void CreateFonts();
   void DestroyFonts();
   void LayoutControls();
@@ -89,6 +106,12 @@ private:
   void RebuildVisibleRows();
   void InvalidateList();
   void DrawListItem(const DRAWITEMSTRUCT* dis);
+  void DrawToolbarButton(const DRAWITEMSTRUCT* dis);
+  void UpdateToolbarButtons();
+  int GetCurrentRowIndex() const;
+  bool ResolveToolbarContext(const ToolbarButtonConfig& button, int& groupIndex, NoteGroupConfig& group,
+    NoteFile& file, const NoteFile*& filePtr) const;
+  void RunToolbarButton(size_t index);
   void HandleListLeftClick(POINT pt);
   void HandleListRightClick(POINT pt);
   int HitTestRow(POINT pt) const;
@@ -123,6 +146,7 @@ private:
   HWND hwnd_ = nullptr;
   HWND hotZone_ = nullptr;
   HWND listBox_ = nullptr;
+  HWND toolbarTooltip_ = nullptr;
   WNDPROC originalListBoxProc_ = nullptr;
   HFONT fontBody_ = nullptr;
   HFONT fontGroup_ = nullptr;
@@ -135,6 +159,7 @@ private:
   std::vector<bool> expandedGroups_{};
   std::vector<bool> showAllGroups_{};
   std::vector<VisibleRow> visibleRows_{};
+  std::vector<ToolbarButtonConfig> toolbarButtons_{};
   std::wstring globalStatusMessage_{};
   std::wstring currentConfigPath_{};
   std::wstring hotKeySpec_ = L"Ctrl+Alt+B";
@@ -147,4 +172,5 @@ private:
   bool trayHidden_ = false;
   bool hotZoneVisible_ = false;
   bool stateLoaded_ = false;
+  int currentRowIndex_ = -1;
 };

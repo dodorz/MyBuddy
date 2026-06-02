@@ -24,6 +24,35 @@ Supported keys:
   - Default: `Ctrl+Alt+B`
   - Simple supported forms: `Ctrl+Alt+B`, `Ctrl+Shift+1`, `Alt+F6`
 
+## Toolbar Section
+
+Optional section name: `[toolbar]`
+
+Supported keys:
+
+- `buttons`
+  - Semicolon-separated toolbar button ids
+  - Buttons are shown left-to-right in this order
+  - If omitted, all `[toolbar_button.*]` sections are auto-discovered
+
+Toolbar button section format: `[toolbar_button.<id>]`
+
+Supported keys:
+
+- `title`
+  - Tooltip text
+  - If missing, defaults to the button id
+- `icon`
+  - Supported in this version: `touch`, `proxy`
+  - Built-in toolbar glyph name, not a file path
+- `scope`
+  - Supported: `global`, `group`, `file`
+  - Default: `global`
+- `command`
+  - Full command template
+  - Uses the same placeholders as `file_action` commands
+  - `file` scope waits for the command to exit, then refreshes that group
+
 ## Example
 
 ```ini
