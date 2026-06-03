@@ -139,6 +139,14 @@ bool IniFile::GetBool(const std::wstring& section, const std::wstring& key, bool
   return GetInt(section, key, def ? 1 : 0) != 0;
 }
 
+bool IniFile::HasSection(const std::wstring& section) const {
+  const std::wstring normalizedSection = ToLower(section);
+  for (const auto& entry : sections_) {
+    if (entry.normalizedName == normalizedSection) return true;
+  }
+  return false;
+}
+
 std::vector<std::wstring> IniFile::GetSectionNames() const {
   std::vector<std::wstring> names;
   names.reserve(sections_.size());

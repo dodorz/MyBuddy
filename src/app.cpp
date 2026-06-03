@@ -182,6 +182,10 @@ bool IsSingleFileLineGroupType(NoteGroupType type) {
   return type == NoteGroupType::TextLines || type == NoteGroupType::TodoTxt;
 }
 
+std::wstring GetPrimaryGroupActionId(const NoteGroupConfig& group) {
+  return group.groupActions.empty() ? L"" : group.groupActions.front();
+}
+
 App::ToolbarScope ParseToolbarScope(const std::wstring& value) {
   const std::wstring normalized = ToLower(Trim(value));
   if (normalized == L"group") return App::ToolbarScope::Group;
@@ -2042,7 +2046,7 @@ std::wstring App::GetGroupHotTooltip(int rowIndex, POINT pt) const {
     row.groupIndex < static_cast<int>(showAllGroups_.size());
   NoteFile sourceFile{};
   const bool supportsOpen = IsSingleFileLineGroupType(group.type) &&
-    !group.defaultFileAction.empty() &&
+    !GetPrimaryGroupActionId(group).empty() &&
     BuildGroupSourceFile(group, sourceFile);
 
   if (supportsNewNotes) {
@@ -2135,7 +2139,7 @@ void App::DrawListItem(const DRAWITEMSTRUCT* dis) {
     const bool showAllEnabled = supportsShowAll && showAllGroups_[row.groupIndex];
     NoteFile sourceFile{};
     const bool supportsOpen = IsSingleFileLineGroupType(group.type) &&
-      !group.defaultFileAction.empty() &&
+      !GetPrimaryGroupActionId(group).empty() &&
       BuildGroupSourceFile(group, sourceFile);
     RECT toggleRc = GetGroupToggleRect(rc);
     RECT showAllRc = GetGroupShowAllRect(rc);
@@ -2536,8 +2540,10 @@ void App::ShowAllForGroup(int groupIndex) {
 void App::OpenGroupNote(int groupIndex) {
   if (groupIndex < 0 || groupIndex >= static_cast<int>(notesConfig_.groups.size())) return;
   const NoteGroupConfig& group = notesConfig_.groups[groupIndex];
-  if (!IsSingleFileLineGroupType(group.type) || group.defaultFileAction.empty()) return;
-  auto actionIt = notesConfig_.actions.find(group.defaultFileAction);
+  if (!IsSingleFileLineGroupType(group.type)) return;
+  const std::wstring actionId = GetPrimaryGroupActionId(group);
+  if (actionId.empty()) return;
+  auto actionIt = notesConfig_.actions.find(actionId);
   if (actionIt == notesConfig_.actions.end()) return;
   NoteFile file{};
   if (!BuildGroupSourceFile(group, file)) return;
@@ -2678,8 +2684,8 @@ void App::CreateNoteFromClipboardForGroup(int groupIndex) {
 void App::OpenFileNote(int groupIndex, int fileIndex) {
   if (groupIndex < 0 || groupIndex >= static_cast<int>(notesConfig_.groups.size())) return;
   const NoteGroupConfig& group = notesConfig_.groups[groupIndex];
-  if (group.defaultFileAction.empty()) return;
-  auto actionIt = notesConfig_.actions.find(group.defaultFileAction);
+  if (group.defaultItemAction.empty()) return;
+  auto actionIt = notesConfig_.actions.find(group.defaultItemAction);
   if (actionIt == notesConfig_.actions.end()) return;
   if (!IsActionTargetCompatible(actionIt->second, &notesByGroup_[groupIndex][fileIndex])) return;
   std::wstring errorMessage;
@@ -2699,7 +2705,7 @@ void App::DeleteFileNote(int groupIndex, int fileIndex) {
   if (!group.deleteCommand.empty()) {
     ActionConfig deleteAction{};
     deleteAction.id = L"Delete";
-    deleteAction.title = L"Delete";
+    deleteAction.title = group.deleteTitle;
     deleteAction.command = group.deleteCommand;
     deleteAction.target = ActionTarget::File;
 
@@ -2734,7 +2740,7 @@ void App::DeleteTextGroupSource(int groupIndex) {
   if (hasSourceFile && !group.deleteCommand.empty()) {
     ActionConfig deleteAction{};
     deleteAction.id = L"Delete";
-    deleteAction.title = L"Delete";
+    deleteAction.title = group.deleteTitle;
     deleteAction.command = group.deleteCommand;
     deleteAction.target = ActionTarget::File;
 
@@ -2776,11 +2782,11 @@ void App::RunGroupMenu(int groupIndex, POINT screenPt) {
   if (supportsNewNotes) {
     AppendMenuW(menu, MF_STRING, kMenuNew, L"New Note");
     AppendMenuW(menu, MF_STRING, kMenuNewFromClipboard, L"New From Clipboard");
+    std::unordered_map<UINT, std::wstring> actionIds;
     if (!group.groupActions.empty()) {
       AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     }
 
-    std::unordered_map<UINT, std::wstring> actionIds;
     for (const std::wstring& actionId : group.groupActions) {
       auto it = notesConfig_.actions.find(actionId);
       if (it == notesConfig_.actions.end()) continue;
@@ -2818,16 +2824,7 @@ void App::RunGroupMenu(int groupIndex, POINT screenPt) {
   }
 
   std::unordered_map<UINT, std::wstring> actionIds;
-  if (hasSourceFile && !group.defaultFileAction.empty()) {
-    auto it = notesConfig_.actions.find(group.defaultFileAction);
-    if (it != notesConfig_.actions.end() && IsActionTargetCompatible(it->second, &sourceFile)) {
-      AppendMenuW(menu, MF_STRING, nextActionId, it->second.title.c_str());
-      actionIds[nextActionId] = group.defaultFileAction;
-      ++nextActionId;
-    }
-  }
-  for (const std::wstring& actionId : group.fileActions) {
-    if (actionId == group.defaultFileAction) continue;
+  for (const std::wstring& actionId : group.groupActions) {
     auto it = notesConfig_.actions.find(actionId);
     if (it == notesConfig_.actions.end()) continue;
     if (!hasSourceFile || !IsActionTargetCompatible(it->second, &sourceFile)) continue;
@@ -2835,8 +2832,9 @@ void App::RunGroupMenu(int groupIndex, POINT screenPt) {
     actionIds[nextActionId] = actionId;
     ++nextActionId;
   }
-  if (hasSourceFile) AppendMenuW(menu, MF_STRING, kMenuDelete, L"Delete");
-  if (!actionIds.empty() || hasSourceFile) AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+  const bool canDeleteSource = hasSourceFile && !group.deleteTitle.empty();
+  if (canDeleteSource) AppendMenuW(menu, MF_STRING, kMenuDelete, group.deleteTitle.c_str());
+  if (!actionIds.empty() || canDeleteSource) AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
   AppendMenuW(menu, MF_STRING, kMenuRefresh, L"Refresh");
   AppendMenuW(menu, MF_STRING, kMenuConfig, L"Config");
 
@@ -2845,7 +2843,7 @@ void App::RunGroupMenu(int groupIndex, POINT screenPt) {
     screenPt.x, screenPt.y, 0, hwnd_, nullptr);
   DestroyMenu(menu);
 
-  if (cmd == kMenuDelete) {
+  if (canDeleteSource && cmd == kMenuDelete) {
     DeleteTextGroupSource(groupIndex);
   } else if (cmd == kMenuRefresh) {
     ReloadConfigAndRefreshNotes();
@@ -2869,13 +2867,13 @@ void App::RunFileMenu(int groupIndex, int fileIndex, POINT screenPt) {
   constexpr UINT kMenuRefresh = 5000;
   constexpr UINT kMenuConfig = 5001;
   constexpr UINT kMenuDelete = 5002;
-  const bool canDelete = group.type == NoteGroupType::Directory;
+  const bool canDelete = group.type == NoteGroupType::Directory && !group.deleteTitle.empty();
 
   UINT nextActionId = 5100;
   std::unordered_map<UINT, std::wstring> actionIds;
 
-  if (!group.defaultFileAction.empty()) {
-    auto it = notesConfig_.actions.find(group.defaultFileAction);
+  if (!group.defaultItemAction.empty()) {
+    auto it = notesConfig_.actions.find(group.defaultItemAction);
     if (it != notesConfig_.actions.end()) {
       if (!IsActionTargetCompatible(it->second, &file)) {
         it = notesConfig_.actions.end();
@@ -2883,13 +2881,13 @@ void App::RunFileMenu(int groupIndex, int fileIndex, POINT screenPt) {
     }
     if (it != notesConfig_.actions.end()) {
       AppendMenuW(menu, MF_STRING, nextActionId, it->second.title.c_str());
-      actionIds[nextActionId] = group.defaultFileAction;
+      actionIds[nextActionId] = group.defaultItemAction;
       ++nextActionId;
     }
   }
 
-  for (const std::wstring& actionId : group.fileActions) {
-    if (actionId == group.defaultFileAction) continue;
+  for (const std::wstring& actionId : group.itemActions) {
+    if (actionId == group.defaultItemAction) continue;
     auto it = notesConfig_.actions.find(actionId);
     if (it == notesConfig_.actions.end()) continue;
     if (!IsActionTargetCompatible(it->second, &file)) continue;
@@ -2897,7 +2895,7 @@ void App::RunFileMenu(int groupIndex, int fileIndex, POINT screenPt) {
     actionIds[nextActionId] = actionId;
     ++nextActionId;
   }
-  if (canDelete) AppendMenuW(menu, MF_STRING, kMenuDelete, L"Delete");
+  if (canDelete) AppendMenuW(menu, MF_STRING, kMenuDelete, group.deleteTitle.c_str());
   if (!actionIds.empty() || canDelete) AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
   AppendMenuW(menu, MF_STRING, kMenuRefresh, L"Refresh");
   AppendMenuW(menu, MF_STRING, kMenuConfig, L"Config");

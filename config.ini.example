@@ -36,7 +36,7 @@ globalHotKey=Ctrl+Alt+B
 ; Example: run your proxy test-and-switch script.
 ; command=C:\Tools\check-and-switch-proxy.cmd
 
-[notes_default]
+[default]
 ; New notes are first created as temporary drafts, then renamed from content
 ; after the editor exits.
 ; Maximum visible items per group.
@@ -45,22 +45,28 @@ maxItems=5
 ; Whether groups start expanded by default.
 ; Allowed values: 0, 1
 defaultGroupExpanded=1
-; Default file action for all groups unless overridden.
-; Must reference a [file_action.*] section.
-defaultFileAction=Edit
-; Optional custom command used by the Delete menu item.
-; If omitted, Delete moves the file to Recycle Bin.
+; Default item action unless overridden.
+; For dirgroup/textgroup/todogroup this must reference [file_action.*].
+; defaultItemAction=Edit
+; Optional name for the delete menu item.
+; If empty, no delete item is shown.
+; deleteName=Delete
+; Optional title override. If omitted, deleteName is used as the title.
+; deleteTitle=Move to Trash
+; Optional custom command used by the delete menu item.
+; If omitted and deleteTitle is set, deletion moves the file to Recycle Bin.
 ; Available placeholders:
 ; {file} {dir} {name} {stem} {group} {group_title} {group_dir}
 ; deleteCommand=some-tool.exe "{file}"
-; Default file-item context menu actions unless overridden.
-; Must reference [file_action.*] sections.
-fileActions=Edit;Reveal
+; Default item context menu actions unless overridden.
+; For dirgroup/textgroup/todogroup this must reference [file_action.*] sections.
+itemActions=Edit;Reveal
 ; Default group-header context menu actions unless overridden.
-; Must reference [dir_action.*] sections.
+; For dirgroup this must reference [dir_action.*] sections.
+; For textgroup/todogroup this must reference [file_action.*] sections.
 groupActions=Terminal
 
-[notes_dir_default]
+[dirgroup]
 ; Default file patterns for dir groups, separated by ';'.
 ; Typical values: *.txt;*.md
 filePatterns=*.txt;*.md
@@ -77,20 +83,68 @@ sortOrder=desc
 ; Whether dir-group file items show file extensions by default.
 ; Allowed values: 0, 1. Default: 0
 showExtensions=0
-; Optional default command used by the Delete menu item in dir groups.
-; If omitted, Delete moves the file to Recycle Bin.
+; Default dirgroup item action.
+; Must reference [file_action.*].
+; defaultItemAction=Edit
+; Optional default name for the delete menu item in dir groups.
+; deleteName=Delete
+; Optional title override. If omitted, deleteName is used as the title.
+; deleteTitle=Move to Trash
+; Optional default command used by the delete menu item in dir groups.
+; If omitted and deleteName/deleteTitle is set, deletion moves the file to Recycle Bin.
 ; deleteCommand=some-tool.exe "{file}"
+; Default dirgroup item context actions.
+; Must reference [file_action.*] sections.
+itemActions=Edit;Reveal
+; Default dirgroup group-header context actions.
+; Must reference [dir_action.*] sections.
+groupActions=Terminal
 
-[notes_text_default]
+[textgroup]
 ; Default sort field for text groups.
 ; Allowed values: line, name, ctime, mtime
 sortBy=line
 ; Default sort direction for text groups.
 ; Allowed values: asc, desc
 sortOrder=asc
-; Optional default command used by the Delete menu item for text-group source files.
-; If omitted, Delete moves the source file to Recycle Bin.
+; Default textgroup item action.
+; If omitted, item click has no default action.
+; defaultItemAction=View
+; Optional default name for the delete menu item for text/todo-group source files.
+; deleteName=Delete
+; Optional title override. If omitted, deleteName is used as the title.
+; deleteTitle=Move to Trash
+; Optional default command used by the delete menu item for text/todo-group source files.
+; If omitted and deleteName/deleteTitle is set, deletion moves the source file to Recycle Bin.
 ; deleteCommand=some-tool.exe "{file}"
+; Default textgroup item context actions.
+; If omitted, groupActions is used.
+; Must reference [file_action.*] sections.
+itemActions=Reveal
+; Default textgroup group-header context actions.
+; Must reference [file_action.*] sections.
+groupActions=Reveal
+
+[todogroup]
+; Default sort field for todo groups.
+; Allowed values: line, name, ctime, mtime
+sortBy=line
+; Default sort direction for todo groups.
+; Allowed values: asc, desc
+sortOrder=asc
+; Default todogroup item action.
+; If omitted, item click has no default action.
+; defaultItemAction=Edit
+; Optional default name for the delete menu item for todo-group source files.
+; deleteName=Delete
+; Optional default command used by the delete menu item for todo-group source files.
+; deleteCommand=some-tool.exe "{file}"
+; Default todogroup item context actions.
+; If omitted, groupActions is used.
+itemActions=Reveal
+; Default todogroup group-header context actions.
+; Must reference [file_action.*] sections.
+groupActions=Reveal
 
 [file_action.Edit]
 ; Menu text shown to the user.
@@ -135,13 +189,18 @@ path=C:\Users\USERNAME\Documents\Notes\Inbox
 ; sortOrder=desc
 ; Action id used when clicking a file item or after creating a new file.
 ; Must reference a [file_action.*] section.
-; defaultFileAction=Edit
-; Optional per-group override for the Delete menu item command.
-; If omitted, Delete moves the target file to Recycle Bin.
+; defaultItemAction=Edit
+; Optional per-group override for the delete menu item name.
+; If empty, no delete item is shown for this group's file items.
+; deleteName=Delete
+; Optional per-group override for the menu text. If omitted, deleteName is used.
+; deleteTitle=Move to Trash
+; Optional per-group override for the delete menu item command.
+; If omitted and deleteName/deleteTitle is set, deletion moves the target file to Recycle Bin.
 ; deleteCommand=some-tool.exe "{file}"
-; Additional file-item context menu actions, separated by ';'.
+; Additional item context menu actions, separated by ';'.
 ; Must reference [file_action.*] sections.
-; fileActions=Edit;Reveal
+; itemActions=Edit;Reveal
 ; Group-header context menu actions, separated by ';'.
 ; Must reference [dir_action.*] sections.
 ; groupActions=Terminal
@@ -151,20 +210,26 @@ path=C:\Users\USERNAME\Documents\Notes\Inbox
 path=C:\Users\USERNAME\Documents\Notes\todo.txt
 ; text groups usually keep file order.
 sortBy=line
-defaultFileAction=Edit
+; If omitted, item click has no default action.
+; defaultItemAction=Edit
+deleteName=Delete
 ; deleteCommand=some-tool.exe "{file}"
-fileActions=Reveal
-groupActions=Terminal
+; If omitted, groupActions is used.
+; itemActions=Reveal
+groupActions=Reveal
 
 [todogroup.tasks]
 ; Path points to one todo.txt file for todo groups.
 path=C:\Users\USERNAME\Documents\Notes\todo.txt
 ; todo groups usually keep file order.
 sortBy=line
-defaultFileAction=Edit
+; If omitted, item click has no default action.
+; defaultItemAction=Edit
+deleteName=Delete
 ; deleteCommand=some-tool.exe "{file}"
-fileActions=Reveal
-groupActions=Terminal
+; If omitted, groupActions is used.
+; itemActions=Reveal
+groupActions=Reveal
 
 [dirgroup.work]
 ; If omitted, the group id "work" is used as the title.
@@ -177,7 +242,8 @@ maxItems=8
 sortBy=name
 sortOrder=asc
 showExtensions=0
-defaultFileAction=Edit
+defaultItemAction=Edit
+deleteName=Trash
 ; deleteCommand=some-tool.exe "{file}"
-fileActions=Edit;Reveal
+itemActions=Edit;Reveal
 groupActions=Terminal

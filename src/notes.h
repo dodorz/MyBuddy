@@ -54,9 +54,10 @@ struct NoteGroupConfig {
   int maxItems = 5;
   NoteSortBy sortBy = NoteSortBy::ModifiedTime;
   SortOrder sortOrder = SortOrder::Desc;
-  std::wstring defaultFileAction;
+  std::wstring defaultItemAction;
+  std::wstring deleteTitle;
   std::wstring deleteCommand;
-  std::vector<std::wstring> fileActions;
+  std::vector<std::wstring> itemActions;
   std::vector<std::wstring> groupActions;
 };
 
@@ -67,9 +68,10 @@ struct NoteGroupDefaults {
   int maxItems = 5;
   NoteSortBy sortBy = NoteSortBy::ModifiedTime;
   SortOrder sortOrder = SortOrder::Desc;
-  std::wstring defaultFileAction;
+  std::wstring defaultItemAction;
+  std::wstring deleteTitle;
   std::wstring deleteCommand;
-  std::vector<std::wstring> fileActions;
+  std::vector<std::wstring> itemActions;
   std::vector<std::wstring> groupActions;
 };
 
@@ -78,6 +80,7 @@ struct NotesConfig {
   NoteGroupDefaults sharedDefaults;
   NoteGroupDefaults dirDefaults;
   NoteGroupDefaults textDefaults;
+  NoteGroupDefaults todoDefaults;
   std::map<std::wstring, ActionConfig> actions;
   std::vector<NoteGroupConfig> groups;
 };

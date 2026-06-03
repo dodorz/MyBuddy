@@ -31,6 +31,25 @@ std::wstring ReadString(const IniFile& ini, const wchar_t* section, const wchar_
   return ini.GetString(section, key, def);
 }
 
+std::wstring ReadTitleOrName(const IniFile& ini, const wchar_t* section,
+  const wchar_t* titleKey, const wchar_t* nameKey, const wchar_t* def = L"") {
+  const std::wstring name = ReadString(ini, section, nameKey, def);
+  return ReadString(ini, section, titleKey, name.c_str());
+}
+
+std::wstring ReadStringFallback(const IniFile& ini, const wchar_t* section,
+  const wchar_t* key, const wchar_t* fallbackKey, const wchar_t* def = L"") {
+  const std::wstring fallback = ReadString(ini, section, fallbackKey, def);
+  return ReadString(ini, section, key, fallback.c_str());
+}
+
+std::vector<std::wstring> ReadListFallback(const IniFile& ini, const wchar_t* section,
+  const wchar_t* key, const wchar_t* fallbackKey) {
+  std::vector<std::wstring> values = SplitList(ReadString(ini, section, key));
+  if (!values.empty()) return values;
+  return SplitList(ReadString(ini, section, fallbackKey));
+}
+
 int ReadInt(const IniFile& ini, const wchar_t* section, const wchar_t* key, int def) {
   return ini.GetInt(section, key, def);
 }
@@ -746,48 +765,59 @@ bool LoadNotesConfig(const std::wstring& path, NotesConfig& config) {
   }
 
   config = NotesConfig{};
-  config.defaultGroupExpanded = ReadBool(ini, L"notes_default", L"defaultGroupExpanded", true);
+  const wchar_t* globalSection = L"default";
+  if (!ini.HasSection(globalSection) && ini.HasSection(L"notes_default")) {
+    globalSection = L"notes_default";
+  }
+  config.defaultGroupExpanded = ReadBool(ini, globalSection, L"defaultGroupExpanded", true);
 
-  config.sharedDefaults.filePatterns = SplitList(ReadString(ini, L"notes_default", L"filePatterns", L"*.txt;*.md"));
+  config.sharedDefaults.filePatterns = SplitList(ReadString(ini, globalSection, L"filePatterns", L"*.txt;*.md"));
   if (config.sharedDefaults.filePatterns.empty()) {
     config.sharedDefaults.filePatterns = {L"*.txt", L"*.md"};
   }
-  config.sharedDefaults.createExtension = NormalizeExtension(ReadString(ini, L"notes_default", L"createExtension"));
-  config.sharedDefaults.maxItems = NormalizeMaxItems(ReadInt(ini, L"notes_default", L"maxItems", 5), 5);
+  config.sharedDefaults.createExtension = NormalizeExtension(ReadString(ini, globalSection, L"createExtension"));
+  config.sharedDefaults.maxItems = NormalizeMaxItems(ReadInt(ini, globalSection, L"maxItems", 5), 5);
   config.sharedDefaults.showExtensions = false;
-  config.sharedDefaults.defaultFileAction = ReadString(ini, L"notes_default", L"defaultFileAction");
-  config.sharedDefaults.deleteCommand = ReadString(ini, L"notes_default", L"deleteCommand");
-  config.sharedDefaults.fileActions = SplitList(ReadString(ini, L"notes_default", L"fileActions"));
-  config.sharedDefaults.groupActions = SplitList(ReadString(ini, L"notes_default", L"groupActions"));
+  config.sharedDefaults.defaultItemAction = ReadStringFallback(ini, globalSection, L"defaultItemAction", L"defaultFileAction");
+  config.sharedDefaults.deleteTitle = ReadTitleOrName(ini, globalSection, L"deleteTitle", L"deleteName");
+  config.sharedDefaults.deleteCommand = ReadString(ini, globalSection, L"deleteCommand");
+  config.sharedDefaults.itemActions = ReadListFallback(ini, globalSection, L"itemActions", L"fileActions");
+  config.sharedDefaults.groupActions = SplitList(ReadString(ini, globalSection, L"groupActions"));
 
   config.dirDefaults = config.sharedDefaults;
   config.dirDefaults.sortBy = NormalizeSortByForGroupType(NoteGroupType::Directory,
-    ParseSortBy(ReadString(ini, L"notes_default", L"sortBy", L"mtime"), NoteSortBy::ModifiedTime),
+    ParseSortBy(ReadString(ini, globalSection, L"sortBy", L"mtime"), NoteSortBy::ModifiedTime),
     NoteSortBy::ModifiedTime);
-  config.dirDefaults.sortOrder = ParseSortOrder(ReadString(ini, L"notes_default", L"sortOrder", L"desc"), SortOrder::Desc);
-  config.dirDefaults.filePatterns = SplitList(ReadString(ini, L"notes_dir_default", L"filePatterns"));
+  config.dirDefaults.sortOrder = ParseSortOrder(ReadString(ini, globalSection, L"sortOrder", L"desc"), SortOrder::Desc);
+  const wchar_t* dirDefaultsSection = L"dirgroup";
+  if (!ini.HasSection(dirDefaultsSection) && ini.HasSection(L"notes_dir_default")) {
+    dirDefaultsSection = L"notes_dir_default";
+  }
+  config.dirDefaults.filePatterns = SplitList(ReadString(ini, dirDefaultsSection, L"filePatterns"));
   if (config.dirDefaults.filePatterns.empty()) {
     config.dirDefaults.filePatterns = config.sharedDefaults.filePatterns;
   }
-  config.dirDefaults.createExtension = NormalizeExtension(ReadString(ini, L"notes_dir_default", L"createExtension",
+  config.dirDefaults.createExtension = NormalizeExtension(ReadString(ini, dirDefaultsSection, L"createExtension",
     config.dirDefaults.createExtension.c_str()));
   config.dirDefaults.maxItems = NormalizeMaxItems(
-    ReadInt(ini, L"notes_dir_default", L"maxItems", config.dirDefaults.maxItems), config.dirDefaults.maxItems);
+    ReadInt(ini, dirDefaultsSection, L"maxItems", config.dirDefaults.maxItems), config.dirDefaults.maxItems);
   config.dirDefaults.sortBy = NormalizeSortByForGroupType(NoteGroupType::Directory,
-    ParseSortBy(ReadString(ini, L"notes_dir_default", L"sortBy"), config.dirDefaults.sortBy),
+    ParseSortBy(ReadString(ini, dirDefaultsSection, L"sortBy"), config.dirDefaults.sortBy),
     config.dirDefaults.sortBy);
-  config.dirDefaults.sortOrder = ParseSortOrder(ReadString(ini, L"notes_dir_default", L"sortOrder"), config.dirDefaults.sortOrder);
-  config.dirDefaults.showExtensions = ReadBool(ini, L"notes_dir_default", L"showExtensions", config.dirDefaults.showExtensions);
-  config.dirDefaults.defaultFileAction = ReadString(ini, L"notes_dir_default", L"defaultFileAction",
-    config.dirDefaults.defaultFileAction.c_str());
-  config.dirDefaults.deleteCommand = ReadString(ini, L"notes_dir_default", L"deleteCommand",
+  config.dirDefaults.sortOrder = ParseSortOrder(ReadString(ini, dirDefaultsSection, L"sortOrder"), config.dirDefaults.sortOrder);
+  config.dirDefaults.showExtensions = ReadBool(ini, dirDefaultsSection, L"showExtensions", config.dirDefaults.showExtensions);
+  config.dirDefaults.defaultItemAction = ReadStringFallback(ini, dirDefaultsSection, L"defaultItemAction", L"defaultFileAction",
+    config.dirDefaults.defaultItemAction.c_str());
+  config.dirDefaults.deleteTitle = ReadTitleOrName(ini, dirDefaultsSection, L"deleteTitle", L"deleteName",
+    config.dirDefaults.deleteTitle.c_str());
+  config.dirDefaults.deleteCommand = ReadString(ini, dirDefaultsSection, L"deleteCommand",
     config.dirDefaults.deleteCommand.c_str());
   {
-    std::vector<std::wstring> actions = SplitList(ReadString(ini, L"notes_dir_default", L"fileActions"));
-    if (!actions.empty()) config.dirDefaults.fileActions = std::move(actions);
+    std::vector<std::wstring> actions = ReadListFallback(ini, dirDefaultsSection, L"itemActions", L"fileActions");
+    if (!actions.empty()) config.dirDefaults.itemActions = std::move(actions);
   }
   {
-    std::vector<std::wstring> actions = SplitList(ReadString(ini, L"notes_dir_default", L"groupActions"));
+    std::vector<std::wstring> actions = SplitList(ReadString(ini, dirDefaultsSection, L"groupActions"));
     if (!actions.empty()) config.dirDefaults.groupActions = std::move(actions);
   }
 
@@ -795,24 +825,61 @@ bool LoadNotesConfig(const std::wstring& path, NotesConfig& config) {
   config.textDefaults.sortBy = NoteSortBy::LineOrder;
   config.textDefaults.sortOrder = SortOrder::Asc;
   config.textDefaults.filePatterns.clear();
-  config.textDefaults.createExtension = NormalizeExtension(ReadString(ini, L"notes_text_default", L"createExtension",
+  const wchar_t* textDefaultsSection = L"textgroup";
+  if (!ini.HasSection(textDefaultsSection) && ini.HasSection(L"notes_text_default")) {
+    textDefaultsSection = L"notes_text_default";
+  }
+  config.textDefaults.createExtension = NormalizeExtension(ReadString(ini, textDefaultsSection, L"createExtension",
     config.textDefaults.createExtension.c_str()));
   config.textDefaults.maxItems = NormalizeMaxItems(
-    ReadInt(ini, L"notes_text_default", L"maxItems", config.textDefaults.maxItems), config.textDefaults.maxItems);
-  config.textDefaults.sortBy = ParseSortBy(ReadString(ini, L"notes_text_default", L"sortBy"), config.textDefaults.sortBy);
-  config.textDefaults.sortOrder = ParseSortOrder(ReadString(ini, L"notes_text_default", L"sortOrder"), config.textDefaults.sortOrder);
+    ReadInt(ini, textDefaultsSection, L"maxItems", config.textDefaults.maxItems), config.textDefaults.maxItems);
+  config.textDefaults.sortBy = ParseSortBy(ReadString(ini, textDefaultsSection, L"sortBy"), config.textDefaults.sortBy);
+  config.textDefaults.sortOrder = ParseSortOrder(ReadString(ini, textDefaultsSection, L"sortOrder"), config.textDefaults.sortOrder);
   config.textDefaults.showExtensions = false;
-  config.textDefaults.defaultFileAction = ReadString(ini, L"notes_text_default", L"defaultFileAction",
-    config.textDefaults.defaultFileAction.c_str());
-  config.textDefaults.deleteCommand = ReadString(ini, L"notes_text_default", L"deleteCommand",
+  config.textDefaults.defaultItemAction = ReadStringFallback(ini, textDefaultsSection, L"defaultItemAction", L"defaultFileAction",
+    config.textDefaults.defaultItemAction.c_str());
+  config.textDefaults.deleteTitle = ReadTitleOrName(ini, textDefaultsSection, L"deleteTitle", L"deleteName",
+    config.textDefaults.deleteTitle.c_str());
+  config.textDefaults.deleteCommand = ReadString(ini, textDefaultsSection, L"deleteCommand",
     config.textDefaults.deleteCommand.c_str());
   {
-    std::vector<std::wstring> actions = SplitList(ReadString(ini, L"notes_text_default", L"fileActions"));
-    if (!actions.empty()) config.textDefaults.fileActions = std::move(actions);
+    std::vector<std::wstring> actions = ReadListFallback(ini, textDefaultsSection, L"itemActions", L"fileActions");
+    if (!actions.empty()) config.textDefaults.itemActions = std::move(actions);
   }
   {
-    std::vector<std::wstring> actions = SplitList(ReadString(ini, L"notes_text_default", L"groupActions"));
+    std::vector<std::wstring> actions = SplitList(ReadString(ini, textDefaultsSection, L"groupActions"));
     if (!actions.empty()) config.textDefaults.groupActions = std::move(actions);
+  }
+  if (config.textDefaults.itemActions.empty()) {
+    config.textDefaults.itemActions = config.textDefaults.groupActions;
+  }
+
+  config.todoDefaults = config.textDefaults;
+  const wchar_t* todoDefaultsSection = L"todogroup";
+  if (ini.HasSection(todoDefaultsSection)) {
+    config.todoDefaults.createExtension = NormalizeExtension(ReadString(ini, todoDefaultsSection, L"createExtension",
+      config.todoDefaults.createExtension.c_str()));
+    config.todoDefaults.maxItems = NormalizeMaxItems(
+      ReadInt(ini, todoDefaultsSection, L"maxItems", config.todoDefaults.maxItems), config.todoDefaults.maxItems);
+    config.todoDefaults.sortBy = ParseSortBy(ReadString(ini, todoDefaultsSection, L"sortBy"), config.todoDefaults.sortBy);
+    config.todoDefaults.sortOrder = ParseSortOrder(ReadString(ini, todoDefaultsSection, L"sortOrder"), config.todoDefaults.sortOrder);
+    config.todoDefaults.defaultItemAction = ReadStringFallback(ini, todoDefaultsSection, L"defaultItemAction", L"defaultFileAction",
+      config.todoDefaults.defaultItemAction.c_str());
+    config.todoDefaults.deleteTitle = ReadTitleOrName(ini, todoDefaultsSection, L"deleteTitle", L"deleteName",
+      config.todoDefaults.deleteTitle.c_str());
+    config.todoDefaults.deleteCommand = ReadString(ini, todoDefaultsSection, L"deleteCommand",
+      config.todoDefaults.deleteCommand.c_str());
+    {
+      std::vector<std::wstring> actions = ReadListFallback(ini, todoDefaultsSection, L"itemActions", L"fileActions");
+      if (!actions.empty()) config.todoDefaults.itemActions = std::move(actions);
+    }
+    {
+      std::vector<std::wstring> actions = SplitList(ReadString(ini, todoDefaultsSection, L"groupActions"));
+      if (!actions.empty()) config.todoDefaults.groupActions = std::move(actions);
+    }
+  }
+  if (config.todoDefaults.itemActions.empty()) {
+    config.todoDefaults.itemActions = config.todoDefaults.groupActions;
   }
 
   std::vector<std::wstring> sections = ini.GetSectionNames();
@@ -850,7 +917,8 @@ bool LoadNotesConfig(const std::wstring& path, NotesConfig& config) {
       }
       if (!group.id.empty() && !group.title.empty() && !group.path.empty()) {
         const NoteGroupDefaults& defaults =
-          group.type == NoteGroupType::Directory ? config.dirDefaults : config.textDefaults;
+          group.type == NoteGroupType::Directory ? config.dirDefaults :
+          (group.type == NoteGroupType::TodoTxt ? config.todoDefaults : config.textDefaults);
         group.expanded = ReadBool(ini, section.c_str(), L"expanded", config.defaultGroupExpanded);
         group.showExtensions = group.type == NoteGroupType::Directory
           ? ReadBool(ini, section.c_str(), L"showExtensions", defaults.showExtensions)
@@ -862,12 +930,24 @@ bool LoadNotesConfig(const std::wstring& path, NotesConfig& config) {
         std::wstring rawSortBy = ReadString(ini, section.c_str(), L"sortBy");
         group.sortBy = NormalizeSortByForGroupType(group.type, ParseSortBy(rawSortBy, defaults.sortBy), defaults.sortBy);
         group.sortOrder = ParseSortOrder(ReadString(ini, section.c_str(), L"sortOrder"), defaults.sortOrder);
-        group.defaultFileAction = ReadString(ini, section.c_str(), L"defaultFileAction", defaults.defaultFileAction.c_str());
+        group.defaultItemAction = ReadStringFallback(ini, section.c_str(), L"defaultItemAction", L"defaultFileAction",
+          defaults.defaultItemAction.c_str());
+        group.deleteTitle = ReadTitleOrName(ini, section.c_str(), L"deleteTitle", L"deleteName",
+          defaults.deleteTitle.c_str());
         group.deleteCommand = ReadString(ini, section.c_str(), L"deleteCommand", defaults.deleteCommand.c_str());
-        group.fileActions = SplitList(ReadString(ini, section.c_str(), L"fileActions"));
-        if (group.fileActions.empty()) group.fileActions = defaults.fileActions;
         group.groupActions = SplitList(ReadString(ini, section.c_str(), L"groupActions"));
         if (group.groupActions.empty()) group.groupActions = defaults.groupActions;
+        std::vector<std::wstring> explicitItemActions =
+          ReadListFallback(ini, section.c_str(), L"itemActions", L"fileActions");
+        group.itemActions = explicitItemActions;
+        if (group.itemActions.empty() && !IsSingleFileLineGroupType(group.type)) {
+          group.itemActions = defaults.itemActions;
+        }
+        if (IsSingleFileLineGroupType(group.type)) {
+          if (group.itemActions.empty()) group.itemActions = group.groupActions;
+        } else if (group.itemActions.empty()) {
+          group.itemActions = defaults.itemActions;
+        }
         config.groups.push_back(group);
       }
     }

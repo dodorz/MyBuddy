@@ -13,6 +13,7 @@ public:
     const std::wstring& def = L"") const;
   int GetInt(const std::wstring& section, const std::wstring& key, int def) const;
   bool GetBool(const std::wstring& section, const std::wstring& key, bool def) const;
+  bool HasSection(const std::wstring& section) const;
   std::vector<std::wstring> GetSectionNames() const;
 
 private:
