@@ -16,6 +16,11 @@ public:
   std::vector<std::wstring> GetSectionNames() const;
 
 private:
-  std::vector<std::wstring> sectionNames_{};
-  std::vector<std::pair<std::wstring, std::vector<std::pair<std::wstring, std::wstring>>>> sections_{};
+  struct SectionEntry {
+    std::wstring originalName;
+    std::wstring normalizedName;
+    std::vector<std::pair<std::wstring, std::wstring>> items;
+  };
+
+  std::vector<SectionEntry> sections_{};
 };

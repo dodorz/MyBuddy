@@ -99,6 +99,8 @@ private:
   void CreateControls();
   void CreateToolbarButtons();
   void DestroyToolbarButtons();
+  void CreateListTooltip();
+  void DestroyListTooltip();
   void CreateFonts();
   void DestroyFonts();
   void LayoutControls();
@@ -114,6 +116,10 @@ private:
   void RunToolbarButton(size_t index);
   void HandleListLeftClick(POINT pt);
   void HandleListRightClick(POINT pt);
+  bool TryToggleCheckboxAtPoint(int groupIndex, int fileIndex, const RECT& rowRect, POINT pt);
+  void UpdateListTooltip(POINT pt);
+  void HideListTooltip();
+  std::wstring GetGroupHotTooltip(int rowIndex, POINT pt) const;
   int HitTestRow(POINT pt) const;
   RECT GetRowRect(int index) const;
   RECT GetGroupToggleRect(const RECT& rowRect) const;
@@ -147,8 +153,12 @@ private:
   HWND hotZone_ = nullptr;
   HWND listBox_ = nullptr;
   HWND toolbarTooltip_ = nullptr;
+  HWND listTooltip_ = nullptr;
   WNDPROC originalListBoxProc_ = nullptr;
   HFONT fontBody_ = nullptr;
+  HFONT fontBodyBold_ = nullptr;
+  HFONT fontBodyItalic_ = nullptr;
+  HFONT fontBodyBoldItalic_ = nullptr;
   HFONT fontGroup_ = nullptr;
   HFONT fontMeta_ = nullptr;
   HFONT fontSymbol_ = nullptr;
@@ -162,6 +172,7 @@ private:
   std::vector<ToolbarButtonConfig> toolbarButtons_{};
   std::wstring globalStatusMessage_{};
   std::wstring currentConfigPath_{};
+  std::wstring listTooltipText_{};
   std::wstring hotKeySpec_ = L"Ctrl+Alt+B";
   UINT hotKeyModifiers_ = MOD_CONTROL | MOD_ALT;
   UINT hotKeyVk_ = 'B';
@@ -172,5 +183,6 @@ private:
   bool trayHidden_ = false;
   bool hotZoneVisible_ = false;
   bool stateLoaded_ = false;
+  bool listTooltipActive_ = false;
   int currentRowIndex_ = -1;
 };

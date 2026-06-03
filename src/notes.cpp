@@ -294,6 +294,130 @@ bool GroupSupportsNewNotes(const NoteGroupConfig& group) {
   return group.type == NoteGroupType::Directory;
 }
 
+enum class TextFileEncoding {
+  Utf8NoBom,
+  Utf8Bom,
+  Acp,
+};
+
+struct EditableTextFile {
+  std::wstring text;
+  std::wstring newline = L"\r\n";
+  TextFileEncoding encoding = TextFileEncoding::Utf8NoBom;
+};
+
+bool ReadBinaryFile(const std::wstring& path, std::string& bytes, std::wstring* errorMessage) {
+  std::ifstream in(path, std::ios::binary);
+  if (!in) {
+    if (errorMessage) *errorMessage = L"Failed to open file: " + FormatWindowsErrorMessage(GetLastError());
+    return false;
+  }
+  bytes.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+  return true;
+}
+
+bool DecodeBytesWithCodePage(const char* data, int size, UINT codePage, DWORD flags, std::wstring& text) {
+  int wideLen = MultiByteToWideChar(codePage, flags, data, size, nullptr, 0);
+  if (wideLen <= 0) return false;
+  text.assign(static_cast<size_t>(wideLen), L'\0');
+  return MultiByteToWideChar(codePage, flags, data, size, text.data(), wideLen) > 0;
+}
+
+bool ReadEditableTextFile(const std::wstring& path, EditableTextFile& file, std::wstring* errorMessage) {
+  std::string bytes;
+  if (!ReadBinaryFile(path, bytes, errorMessage)) return false;
+
+  const char* data = bytes.data();
+  int size = static_cast<int>(bytes.size());
+  bool utf8Bom = false;
+  if (size >= 3 &&
+      static_cast<unsigned char>(data[0]) == 0xEF &&
+      static_cast<unsigned char>(data[1]) == 0xBB &&
+      static_cast<unsigned char>(data[2]) == 0xBF) {
+    utf8Bom = true;
+    data += 3;
+    size -= 3;
+  }
+
+  file = EditableTextFile{};
+  if (utf8Bom) file.encoding = TextFileEncoding::Utf8Bom;
+
+  if (!DecodeBytesWithCodePage(data, size, CP_UTF8, MB_ERR_INVALID_CHARS, file.text)) {
+    if (!DecodeBytesWithCodePage(data, size, CP_ACP, 0, file.text)) {
+      if (errorMessage) *errorMessage = L"Failed to decode text file.";
+      return false;
+    }
+    file.encoding = TextFileEncoding::Acp;
+  } else if (!utf8Bom) {
+    file.encoding = TextFileEncoding::Utf8NoBom;
+  }
+
+  if (file.text.find(L"\r\n") != std::wstring::npos) {
+    file.newline = L"\r\n";
+  } else if (file.text.find(L'\n') != std::wstring::npos) {
+    file.newline = L"\n";
+  } else if (file.text.find(L'\r') != std::wstring::npos) {
+    file.newline = L"\r";
+  }
+  return true;
+}
+
+bool EncodeTextWithCodePage(const std::wstring& text, UINT codePage, std::string& bytes) {
+  int byteLen = WideCharToMultiByte(codePage, 0, text.data(), static_cast<int>(text.size()), nullptr, 0, nullptr, nullptr);
+  if (byteLen < 0) return false;
+  bytes.assign(static_cast<size_t>(byteLen), '\0');
+  return WideCharToMultiByte(codePage, 0, text.data(), static_cast<int>(text.size()), bytes.data(), byteLen, nullptr, nullptr) > 0;
+}
+
+bool WriteEditableTextFile(const std::wstring& path, const EditableTextFile& file, const std::vector<std::wstring>& lines,
+  std::wstring* errorMessage) {
+  std::wstring text;
+  for (size_t i = 0; i < lines.size(); ++i) {
+    if (i > 0) text += file.newline;
+    text += lines[i];
+  }
+
+  std::string bytes;
+  UINT codePage = file.encoding == TextFileEncoding::Acp ? CP_ACP : CP_UTF8;
+  if (!EncodeTextWithCodePage(text, codePage, bytes)) {
+    if (errorMessage) *errorMessage = L"Failed to encode updated text file.";
+    return false;
+  }
+  if (file.encoding == TextFileEncoding::Utf8Bom) {
+    bytes.insert(bytes.begin(), {'\xEF', '\xBB', '\xBF'});
+  }
+
+  std::ofstream out(path, std::ios::binary | std::ios::trunc);
+  if (!out) {
+    if (errorMessage) *errorMessage = L"Failed to open file for writing: " + FormatWindowsErrorMessage(GetLastError());
+    return false;
+  }
+  out.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+  if (!out.good()) {
+    if (errorMessage) *errorMessage = L"Failed to write updated file.";
+    return false;
+  }
+  return true;
+}
+
+bool ToggleMarkdownCheckboxLine(std::wstring& line) {
+  size_t start = 0;
+  while (start < line.size() && (line[start] == L' ' || line[start] == L'\t')) ++start;
+  if (start + 5 > line.size()) return false;
+  if (line[start] != L'-' || line[start + 1] != L' ' || line[start + 2] != L'[' || line[start + 4] != L']') {
+    return false;
+  }
+  if (line[start + 3] == L' ') {
+    line[start + 3] = L'x';
+    return true;
+  }
+  if (line[start + 3] == L'x' || line[start + 3] == L'X') {
+    line[start + 3] = L' ';
+    return true;
+  }
+  return false;
+}
+
 bool TryFindTomlFrontMatter(const std::vector<std::wstring>& lines, size_t& contentStartLine) {
   contentStartLine = 0;
   if (lines.empty()) return false;
@@ -371,15 +495,54 @@ std::wstring ExtractTextGroupTitle(const std::wstring& path) {
   std::wstring title = TryParseTomlTitle(lines, contentStart);
   if (!title.empty()) return title;
 
-  if (contentStart < lines.size()) {
-    std::wstring firstLine = Trim(lines[contentStart]);
-    if (!firstLine.empty() && firstLine[0] == L'#') {
+  size_t firstContentLine = contentStart;
+  while (firstContentLine < lines.size() && Trim(lines[firstContentLine]).empty()) ++firstContentLine;
+
+  for (size_t i = contentStart; i < lines.size(); ++i) {
+    std::wstring line = Trim(lines[i]);
+    if (line.rfind(L"# ", 0) == 0) {
+      title = StripMdHeading(line);
+      if (!title.empty()) return title;
+    }
+  }
+
+  if (firstContentLine < lines.size()) {
+    std::wstring firstLine = Trim(lines[firstContentLine]);
+    if (firstLine.rfind(L"#", 0) == 0) {
       title = StripMdHeading(firstLine);
       if (!title.empty()) return title;
     }
   }
 
   return sourceStem.empty() ? sourceName : sourceStem;
+}
+
+std::wstring ExtractMarkdownDisplayName(const std::wstring& path, const std::wstring& fallback) {
+  std::vector<std::wstring> lines = SplitLines(ReadTextFile(path));
+  size_t contentStart = 0;
+  std::wstring title = TryParseTomlTitle(lines, contentStart);
+  if (!title.empty()) return title;
+
+  size_t firstContentLine = contentStart;
+  while (firstContentLine < lines.size() && Trim(lines[firstContentLine]).empty()) ++firstContentLine;
+
+  for (size_t i = contentStart; i < lines.size(); ++i) {
+    std::wstring line = Trim(lines[i]);
+    if (line.rfind(L"# ", 0) == 0) {
+      title = StripMdHeading(line);
+      if (!title.empty()) return title;
+    }
+  }
+
+  if (firstContentLine < lines.size()) {
+    std::wstring firstLine = Trim(lines[firstContentLine]);
+    if (firstLine.rfind(L"#", 0) == 0) {
+      title = StripMdHeading(firstLine);
+      if (!title.empty()) return title;
+    }
+  }
+
+  return fallback;
 }
 
 std::wstring ChooseCreateExtension(const NoteGroupConfig& group) {
@@ -666,8 +829,18 @@ void LoadNoteFiles(const NoteGroupConfig& group, std::vector<NoteFile>& files, N
         file.dir = group.path;
         file.name = ffd.cFileName;
         file.stem = GetFileStem(file.name);
-        file.displayName.clear();
-        file.itemText = file.stem;
+        const size_t fileDot = file.name.find_last_of(L'.');
+        const std::wstring fileExtension = fileDot == std::wstring::npos
+          ? L""
+          : ToLower(NormalizeExtension(file.name.substr(fileDot)));
+        if (fileExtension == L".md") {
+          file.displayName = ExtractMarkdownDisplayName(fullPath, file.stem);
+          file.itemText = StripMarkdownLinePrefix(file.displayName);
+          if (file.itemText.empty()) file.itemText = file.stem;
+        } else {
+          file.displayName.clear();
+          file.itemText = file.stem;
+        }
         file.createdTime = ffd.ftCreationTime;
         file.modifiedTime = ffd.ftLastWriteTime;
         files.push_back(file);
@@ -694,6 +867,11 @@ void LoadNoteFiles(const NoteGroupConfig& group, std::vector<NoteFile>& files, N
     const std::wstring sourceExtension = ToLower(NormalizeExtension(group.path.substr(group.path.find_last_of(L'.'))));
     if (sourceExtension == L".md") {
       TryFindTomlFrontMatter(lines, contentStart);
+      size_t firstContentLine = contentStart;
+      while (firstContentLine < lines.size() && Trim(lines[firstContentLine]).empty()) ++firstContentLine;
+      if (firstContentLine < lines.size() && Trim(lines[firstContentLine]).rfind(L"# ", 0) == 0) {
+        contentStart = firstContentLine + 1;
+      }
     }
     for (size_t i = contentStart; i < lines.size(); ++i) {
       if (Trim(lines[i]).empty()) continue;
@@ -746,6 +924,29 @@ void LoadNoteFiles(const NoteGroupConfig& group, std::vector<NoteFile>& files, N
   if (files.empty() && state) {
     *state = NoteGroupLoadState::Empty;
   }
+}
+
+bool ToggleMarkdownCheckbox(const NoteFile& file, std::wstring* errorMessage) {
+  if (file.path.empty() || file.lineNumber <= 0) {
+    if (errorMessage) *errorMessage = L"Invalid note item.";
+    return false;
+  }
+
+  EditableTextFile textFile{};
+  if (!ReadEditableTextFile(file.path, textFile, errorMessage)) return false;
+
+  std::vector<std::wstring> lines = SplitLines(textFile.text);
+  const size_t index = static_cast<size_t>(file.lineNumber - 1);
+  if (index >= lines.size()) {
+    if (errorMessage) *errorMessage = L"Target line is out of range.";
+    return false;
+  }
+  if (!ToggleMarkdownCheckboxLine(lines[index])) {
+    if (errorMessage) *errorMessage = L"Target line is not a markdown checkbox.";
+    return false;
+  }
+
+  return WriteEditableTextFile(file.path, textFile, lines, errorMessage);
 }
 
 bool CreateNoteInGroup(const NoteGroupConfig& group, std::wstring& createdPath, std::wstring* errorMessage) {

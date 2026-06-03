@@ -54,6 +54,13 @@ std::wstring Trim(std::wstring value) {
   return value.substr(start, end - start);
 }
 
+std::wstring TrimRight(std::wstring value) {
+  size_t end = value.size();
+  while (end > 0 && iswspace(value[end - 1])) --end;
+  value.resize(end);
+  return value;
+}
+
 std::wstring ToUpper(std::wstring value) {
   std::transform(value.begin(), value.end(), value.begin(), towupper);
   return value;
@@ -240,6 +247,28 @@ struct MarkdownCheckbox {
   std::wstring label;
 };
 
+struct MarkdownRun {
+  std::wstring text;
+  bool bold = false;
+  bool italic = false;
+};
+
+struct MarkdownLine {
+  enum class Kind {
+    Plain,
+    Heading2,
+    Heading3,
+    HorizontalRule,
+    UnorderedList,
+    OrderedList,
+  };
+
+  Kind kind = Kind::Plain;
+  std::wstring indent;
+  std::wstring prefix;
+  std::vector<MarkdownRun> runs;
+};
+
 std::wstring ExpandTabsForDisplay(const std::wstring& text, int tabWidth = 4) {
   std::wstring expanded;
   int column = 0;
@@ -284,6 +313,110 @@ MarkdownCheckbox ParseMarkdownCheckbox(const std::wstring& text) {
   if (parse(L'x', MarkdownCheckbox::State::Checked)) return checkbox;
   if (parse(L'X', MarkdownCheckbox::State::Checked)) return checkbox;
   return checkbox;
+}
+
+bool IsMarkdownHorizontalRule(const std::wstring& text) {
+  std::wstring trimmed = Trim(text);
+  if (trimmed.size() < 3) return false;
+
+  wchar_t marker = 0;
+  int count = 0;
+  for (wchar_t ch : trimmed) {
+    if (ch == L' ') continue;
+    if (ch != L'-' && ch != L'*' && ch != L'_') return false;
+    if (marker == 0) marker = ch;
+    if (ch != marker) return false;
+    ++count;
+  }
+  return count >= 3;
+}
+
+std::vector<MarkdownRun> ParseMarkdownRuns(const std::wstring& text) {
+  std::vector<MarkdownRun> runs;
+  std::wstring buffer;
+  bool bold = false;
+  bool italic = false;
+
+  auto flush = [&]() {
+    if (buffer.empty()) return;
+    runs.push_back({buffer, bold, italic});
+    buffer.clear();
+  };
+
+  for (size_t i = 0; i < text.size();) {
+    if (i + 1 < text.size() && ((text[i] == L'*' && text[i + 1] == L'*') || (text[i] == L'_' && text[i + 1] == L'_'))) {
+      const std::wstring marker = text.substr(i, 2);
+      if (bold || text.find(marker, i + 2) != std::wstring::npos) {
+        flush();
+        bold = !bold;
+        i += 2;
+        continue;
+      }
+    }
+    if (text[i] == L'*' || text[i] == L'_') {
+      if (italic || text.find(text[i], i + 1) != std::wstring::npos) {
+        flush();
+        italic = !italic;
+        ++i;
+        continue;
+      }
+    }
+    buffer.push_back(text[i]);
+    ++i;
+  }
+  flush();
+  if (runs.empty()) runs.push_back({text, false, false});
+  return runs;
+}
+
+std::wstring FlattenMarkdownRuns(const std::vector<MarkdownRun>& runs) {
+  std::wstring text;
+  for (const MarkdownRun& run : runs) {
+    text += run.text;
+  }
+  return text;
+}
+
+MarkdownLine ParseMarkdownLine(const std::wstring& text) {
+  MarkdownLine line{};
+  size_t start = 0;
+  while (start < text.size() && (text[start] == L' ' || text[start] == L'\t')) ++start;
+  line.indent = text.substr(0, start);
+  const std::wstring body = TrimRight(text.substr(start));
+  const std::wstring trimmed = Trim(body);
+
+  if (IsMarkdownHorizontalRule(trimmed)) {
+    line.kind = MarkdownLine::Kind::HorizontalRule;
+    return line;
+  }
+
+  std::wstring content = body;
+  if (trimmed.rfind(L"### ", 0) == 0) {
+    line.kind = MarkdownLine::Kind::Heading3;
+    content = trimmed.substr(4);
+  } else if (trimmed.rfind(L"## ", 0) == 0) {
+    line.kind = MarkdownLine::Kind::Heading2;
+    content = trimmed.substr(3);
+  } else if (trimmed.rfind(L"# ", 0) == 0) {
+    content = trimmed.substr(2);
+  } else if (body.size() >= 2 &&
+             (body[0] == L'-' || body[0] == L'*' || body[0] == L'+') &&
+             body[1] == L' ') {
+    line.kind = MarkdownLine::Kind::UnorderedList;
+    line.prefix = L"- ";
+    content = body.substr(2);
+  } else {
+    size_t digitEnd = 0;
+    while (digitEnd < body.size() && iswdigit(body[digitEnd])) ++digitEnd;
+    if (digitEnd > 0 && digitEnd + 1 < body.size() && body[digitEnd] == L'.' && body[digitEnd + 1] == L' ') {
+      line.kind = MarkdownLine::Kind::OrderedList;
+      line.prefix = body.substr(0, digitEnd + 1) + L" ";
+      content = body.substr(digitEnd + 2);
+    }
+  }
+
+  line.runs = ParseMarkdownRuns(content);
+  return line;
 }
 
 bool BuildGroupSourceFile(const NoteGroupConfig& group, NoteFile& file) {
@@ -390,6 +523,82 @@ int MeasureTextWidth(HDC dc, const std::wstring& text) {
   SIZE size{};
   GetTextExtentPoint32W(dc, text.c_str(), static_cast<int>(text.size()), &size);
   return size.cx;
+}
+
+int MeasureTextWidthWithFont(HDC dc, HFONT font, const std::wstring& text) {
+  if (!font) return MeasureTextWidth(dc, text);
+  HGDIOBJ oldFont = SelectObject(dc, font);
+  const int width = MeasureTextWidth(dc, text);
+  SelectObject(dc, oldFont);
+  return width;
+}
+
+HFONT PickMarkdownFont(const MarkdownRun& run, HFONT regular, HFONT bold, HFONT italic, HFONT boldItalic) {
+  if (run.bold && run.italic && boldItalic) return boldItalic;
+  if (run.bold && bold) return bold;
+  if (run.italic && italic) return italic;
+  return regular;
+}
+
+void DrawStyledMarkdownRuns(HDC dc, RECT rc, const std::wstring& prefix, const std::vector<MarkdownRun>& runs,
+  HFONT regular, HFONT bold, HFONT italic, HFONT boldItalic) {
+  const std::wstring plainText = prefix + FlattenMarkdownRuns(runs);
+  int totalWidth = MeasureTextWidthWithFont(dc, regular, ExpandTabsForDisplay(prefix));
+  for (const MarkdownRun& run : runs) {
+    totalWidth += MeasureTextWidthWithFont(dc, PickMarkdownFont(run, regular, bold, italic, boldItalic), run.text);
+  }
+
+  if (totalWidth > (rc.right - rc.left)) {
+    HGDIOBJ oldFont = SelectObject(dc, regular);
+    std::wstring fallback = ExpandTabsForDisplay(plainText);
+    DrawTextW(dc, fallback.c_str(), -1, &rc, DT_SINGLELINE | DT_VCENTER | DT_LEFT | DT_END_ELLIPSIS);
+    SelectObject(dc, oldFont);
+    return;
+  }
+
+  int x = rc.left;
+  if (!prefix.empty()) {
+    const std::wstring expandedPrefix = ExpandTabsForDisplay(prefix);
+    HGDIOBJ oldFont = SelectObject(dc, regular);
+    TextOutW(dc, x, rc.top + ((rc.bottom - rc.top) - 16) / 2, expandedPrefix.c_str(), static_cast<int>(expandedPrefix.size()));
+    x += MeasureTextWidth(dc, expandedPrefix);
+    SelectObject(dc, oldFont);
+  }
+
+  for (const MarkdownRun& run : runs) {
+    if (run.text.empty()) continue;
+    HFONT font = PickMarkdownFont(run, regular, bold, italic, boldItalic);
+    HGDIOBJ oldFont = SelectObject(dc, font);
+    TextOutW(dc, x, rc.top + ((rc.bottom - rc.top) - 16) / 2, run.text.c_str(), static_cast<int>(run.text.size()));
+    x += MeasureTextWidth(dc, run.text);
+    SelectObject(dc, oldFont);
+    if (x >= rc.right) break;
+  }
+}
+
+void DrawMarkdownLine(HDC dc, RECT rc, const MarkdownLine& line,
+  HFONT body, HFONT bodyBold, HFONT bodyItalic, HFONT bodyBoldItalic, HFONT heading2, HFONT heading3) {
+  if (line.kind == MarkdownLine::Kind::HorizontalRule) {
+    HPEN pen = CreatePen(PS_SOLID, 1, RGB(190, 198, 208));
+    HGDIOBJ oldPen = SelectObject(dc, pen);
+    const int y = (rc.top + rc.bottom) / 2;
+    MoveToEx(dc, rc.left, y, nullptr);
+    LineTo(dc, rc.right, y);
+    SelectObject(dc, oldPen);
+    DeleteObject(pen);
+    return;
+  }
+
+  if (line.kind == MarkdownLine::Kind::Heading2 || line.kind == MarkdownLine::Kind::Heading3) {
+    const HFONT font = line.kind == MarkdownLine::Kind::Heading2 ? heading2 : heading3;
+    HGDIOBJ oldFont = SelectObject(dc, font);
+    std::wstring text = ExpandTabsForDisplay(line.indent + FlattenMarkdownRuns(line.runs));
+    DrawTextW(dc, text.c_str(), -1, &rc, DT_SINGLELINE | DT_VCENTER | DT_LEFT | DT_END_ELLIPSIS);
+    SelectObject(dc, oldFont);
+    return;
+  }
+
+  DrawStyledMarkdownRuns(dc, rc, line.indent + line.prefix, line.runs, body, bodyBold, bodyItalic, bodyBoldItalic);
 }
 
 std::wstring FormatAdaptiveFileTime(HDC dc, const FILETIME& ft, int availableWidth) {
@@ -771,6 +980,7 @@ LRESULT App::HandleMainMessage(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         CloseHandle(singleInstanceMutex_);
         singleInstanceMutex_ = nullptr;
       }
+      DestroyListTooltip();
       DestroyToolbarButtons();
       DestroyFonts();
       PostQuitMessage(0);
@@ -810,12 +1020,27 @@ LRESULT App::HandleHotZoneMessage(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
 LRESULT App::HandleListBoxMessage(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
   switch (msg) {
+    case WM_MOUSEMOVE: {
+      TRACKMOUSEEVENT tme{};
+      tme.cbSize = sizeof(tme);
+      tme.dwFlags = TME_LEAVE;
+      tme.hwndTrack = hwnd;
+      TrackMouseEvent(&tme);
+      POINT pt{ GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
+      UpdateListTooltip(pt);
+      break;
+    }
+    case WM_MOUSELEAVE:
+      HideListTooltip();
+      break;
     case WM_LBUTTONUP: {
+      HideListTooltip();
       POINT pt{ GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
       HandleListLeftClick(pt);
       return 0;
     }
     case WM_RBUTTONUP: {
+      HideListTooltip();
       POINT pt{ GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
       HandleListRightClick(pt);
       return 0;
@@ -1354,6 +1579,7 @@ void App::CreateControls() {
   SendMessageW(listBox_, WM_SETFONT, reinterpret_cast<WPARAM>(fontBody_), TRUE);
   SetWindowLongPtrW(listBox_, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(this));
   originalListBoxProc_ = reinterpret_cast<WNDPROC>(SetWindowLongPtrW(listBox_, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(App::ListBoxProc)));
+  CreateListTooltip();
   CreateToolbarButtons();
 }
 
@@ -1368,6 +1594,40 @@ void App::DestroyToolbarButtons() {
     DestroyWindow(toolbarTooltip_);
     toolbarTooltip_ = nullptr;
   }
+}
+
+void App::CreateListTooltip() {
+  DestroyListTooltip();
+  if (!listBox_) return;
+
+  listTooltip_ = CreateWindowExW(WS_EX_TOPMOST, TOOLTIPS_CLASSW, nullptr,
+    WS_POPUP | TTS_ALWAYSTIP | TTS_NOPREFIX,
+    CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT,
+    hwnd_, nullptr, instance_, nullptr);
+  if (!listTooltip_) return;
+
+  SetWindowPos(listTooltip_, HWND_TOPMOST, 0, 0, 0, 0,
+    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+
+  RECT rc{};
+  GetClientRect(listBox_, &rc);
+  TOOLINFOW ti{};
+  ti.cbSize = sizeof(ti);
+  ti.uFlags = TTF_TRACK | TTF_ABSOLUTE;
+  ti.hwnd = listBox_;
+  ti.uId = 1;
+  ti.rect = rc;
+  ti.lpszText = const_cast<LPWSTR>(L"");
+  SendMessageW(listTooltip_, TTM_ADDTOOLW, 0, reinterpret_cast<LPARAM>(&ti));
+}
+
+void App::DestroyListTooltip() {
+  if (listTooltip_) {
+    DestroyWindow(listTooltip_);
+    listTooltip_ = nullptr;
+  }
+  listTooltipText_.clear();
+  listTooltipActive_ = false;
 }
 
 void App::CreateToolbarButtons() {
@@ -1418,6 +1678,18 @@ void App::CreateFonts() {
     scale(8), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
     DEFAULT_CHARSET, OUT_OUTLINE_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
     VARIABLE_PITCH, L"Segoe UI");
+  fontBodyBold_ = CreateFontW(
+    scale(8), 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
+    DEFAULT_CHARSET, OUT_OUTLINE_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+    VARIABLE_PITCH, L"Segoe UI");
+  fontBodyItalic_ = CreateFontW(
+    scale(8), 0, 0, 0, FW_NORMAL, TRUE, FALSE, FALSE,
+    DEFAULT_CHARSET, OUT_OUTLINE_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+    VARIABLE_PITCH, L"Segoe UI");
+  fontBodyBoldItalic_ = CreateFontW(
+    scale(8), 0, 0, 0, FW_BOLD, TRUE, FALSE, FALSE,
+    DEFAULT_CHARSET, OUT_OUTLINE_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+    VARIABLE_PITCH, L"Segoe UI");
   fontGroup_ = CreateFontW(
     scale(10), 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
     DEFAULT_CHARSET, OUT_OUTLINE_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
@@ -1434,10 +1706,16 @@ void App::CreateFonts() {
 
 void App::DestroyFonts() {
   if (fontBody_) DeleteObject(fontBody_);
+  if (fontBodyBold_) DeleteObject(fontBodyBold_);
+  if (fontBodyItalic_) DeleteObject(fontBodyItalic_);
+  if (fontBodyBoldItalic_) DeleteObject(fontBodyBoldItalic_);
   if (fontGroup_) DeleteObject(fontGroup_);
   if (fontMeta_) DeleteObject(fontMeta_);
   if (fontSymbol_) DeleteObject(fontSymbol_);
   fontBody_ = nullptr;
+  fontBodyBold_ = nullptr;
+  fontBodyItalic_ = nullptr;
+  fontBodyBoldItalic_ = nullptr;
   fontGroup_ = nullptr;
   fontMeta_ = nullptr;
   fontSymbol_ = nullptr;
@@ -1603,6 +1881,82 @@ RECT App::GetGroupClipboardRect(const RECT& rowRect) const {
   return GetGroupOpenRect(rowRect);
 }
 
+std::wstring App::GetGroupHotTooltip(int rowIndex, POINT pt) const {
+  if (rowIndex < 0 || rowIndex >= static_cast<int>(visibleRows_.size())) return L"";
+  const VisibleRow& row = visibleRows_[rowIndex];
+  if (row.type != VisibleRow::Type::Group) return L"";
+
+  const NoteGroupConfig& group = notesConfig_.groups[row.groupIndex];
+  const RECT rowRect = GetRowRect(rowIndex);
+  const bool supportsNewNotes = group.type == NoteGroupType::Directory;
+  const bool supportsShowAll = group.type == NoteGroupType::TextLines && group.maxItems > 0 &&
+    row.groupIndex < static_cast<int>(showAllGroups_.size());
+  NoteFile sourceFile{};
+  const bool supportsOpen = group.type == NoteGroupType::TextLines &&
+    !group.defaultFileAction.empty() &&
+    BuildGroupSourceFile(group, sourceFile);
+
+  if (supportsNewNotes) {
+    RECT addRc = GetGroupAddRect(rowRect);
+    RECT clipboardRc = GetGroupClipboardRect(rowRect);
+    if (PtInRect(&addRc, pt)) return L"Add note";
+    if (PtInRect(&clipboardRc, pt)) return L"New from clipboard";
+    return L"";
+  }
+
+  RECT showAllRc = GetGroupShowAllRect(rowRect);
+  RECT openRc = GetGroupOpenRect(rowRect);
+  if (supportsShowAll && PtInRect(&showAllRc, pt)) {
+    return showAllGroups_[row.groupIndex] ? L"Show fewer" : L"Show all";
+  }
+  if (supportsOpen && PtInRect(&openRc, pt)) {
+    return L"Open source";
+  }
+  return L"";
+}
+
+void App::HideListTooltip() {
+  if (!listTooltip_) return;
+  if (listTooltipActive_) {
+    TOOLINFOW ti{};
+    ti.cbSize = sizeof(ti);
+    ti.hwnd = listBox_;
+    ti.uId = 1;
+    SendMessageW(listTooltip_, TTM_TRACKACTIVATE, FALSE, reinterpret_cast<LPARAM>(&ti));
+  }
+  listTooltipActive_ = false;
+  listTooltipText_.clear();
+}
+
+void App::UpdateListTooltip(POINT pt) {
+  if (!listTooltip_ || !listBox_) return;
+
+  const int rowIndex = HitTestRow(pt);
+  const std::wstring tooltip = GetGroupHotTooltip(rowIndex, pt);
+  if (tooltip.empty()) {
+    HideListTooltip();
+    return;
+  }
+
+  listTooltipText_ = tooltip;
+
+  TOOLINFOW ti{};
+  ti.cbSize = sizeof(ti);
+  ti.uFlags = TTF_TRACK | TTF_ABSOLUTE;
+  ti.hwnd = listBox_;
+  ti.uId = 1;
+  ti.lpszText = const_cast<LPWSTR>(listTooltipText_.c_str());
+  SendMessageW(listTooltip_, TTM_UPDATETIPTEXTW, 0, reinterpret_cast<LPARAM>(&ti));
+
+  POINT screenPt = pt;
+  ClientToScreen(listBox_, &screenPt);
+  SendMessageW(listTooltip_, TTM_TRACKPOSITION, 0, MAKELPARAM(screenPt.x + 14, screenPt.y + 18));
+  if (!listTooltipActive_) {
+    SendMessageW(listTooltip_, TTM_TRACKACTIVATE, TRUE, reinterpret_cast<LPARAM>(&ti));
+    listTooltipActive_ = true;
+  }
+}
+
 void App::DrawListItem(const DRAWITEMSTRUCT* dis) {
   if (dis->itemID == static_cast<UINT>(-1) || dis->itemID >= visibleRows_.size()) return;
 
@@ -1695,7 +2049,8 @@ void App::DrawListItem(const DRAWITEMSTRUCT* dis) {
       nameRc.right = timeRc.right - 32;
       MarkdownCheckbox checkbox = ParseMarkdownCheckbox(displayName);
       if (checkbox.state == MarkdownCheckbox::State::None) {
-        DrawTextW(dc, displayName.c_str(), -1, &nameRc, DT_SINGLELINE | DT_VCENTER | DT_LEFT | DT_END_ELLIPSIS | DT_EXPANDTABS);
+        DrawMarkdownLine(dc, nameRc, ParseMarkdownLine(displayName),
+          fontBody_, fontBodyBold_, fontBodyItalic_, fontBodyBoldItalic_, fontGroup_, fontBodyBold_);
       } else {
         const int indentWidth = MeasureTextWidth(dc, ExpandTabsForDisplay(checkbox.indent));
         RECT boxRc{};
@@ -1709,7 +2064,8 @@ void App::DrawListItem(const DRAWITEMSTRUCT* dis) {
 
         RECT labelRc = nameRc;
         labelRc.left = boxRc.right + 6;
-        DrawTextW(dc, checkbox.label.c_str(), -1, &labelRc, DT_SINGLELINE | DT_VCENTER | DT_LEFT | DT_END_ELLIPSIS);
+        DrawStyledMarkdownRuns(dc, labelRc, L"", ParseMarkdownRuns(checkbox.label),
+          fontBody_, fontBodyBold_, fontBodyItalic_, fontBodyBoldItalic_);
       }
       std::wstring lineText = L"#" + std::to_wstring(file.lineNumber);
       timeRc.left = nameRc.right + 8;
@@ -1732,7 +2088,8 @@ void App::DrawListItem(const DRAWITEMSTRUCT* dis) {
         timeRc.left = timeRc.right;
       }
 
-      DrawTextW(dc, displayName.c_str(), -1, &nameRc, DT_SINGLELINE | DT_VCENTER | DT_LEFT | DT_END_ELLIPSIS);
+      DrawMarkdownLine(dc, nameRc, ParseMarkdownLine(displayName),
+        fontBody_, fontBodyBold_, fontBodyItalic_, fontBodyBoldItalic_, fontGroup_, fontBodyBold_);
       SelectObject(dc, fontMeta_);
       SetTextColor(dc, RGB(96, 104, 116));
       if (!timeText.empty()) {
@@ -1897,6 +2254,51 @@ void App::RunToolbarButton(size_t index) {
   }
 }
 
+bool App::TryToggleCheckboxAtPoint(int groupIndex, int fileIndex, const RECT& rowRect, POINT pt) {
+  if (groupIndex < 0 || groupIndex >= static_cast<int>(notesConfig_.groups.size())) return false;
+  if (fileIndex < 0 || fileIndex >= static_cast<int>(notesByGroup_[groupIndex].size())) return false;
+
+  const NoteGroupConfig& group = notesConfig_.groups[groupIndex];
+  if (group.type != NoteGroupType::TextLines || !listBox_) return false;
+
+  const NoteFile& file = notesByGroup_[groupIndex][fileIndex];
+  const std::wstring& displayName = file.displayName.empty()
+    ? (group.showExtensions ? file.name : file.stem)
+    : file.displayName;
+  MarkdownCheckbox checkbox = ParseMarkdownCheckbox(displayName);
+  if (checkbox.state == MarkdownCheckbox::State::None) return false;
+
+  RECT nameRc = rowRect;
+  nameRc.left += kFileIndent;
+  RECT timeRc = rowRect;
+  timeRc.right -= 8;
+  nameRc.right = timeRc.right - 32;
+
+  HDC dc = GetDC(listBox_);
+  if (!dc) return false;
+  HGDIOBJ oldFont = SelectObject(dc, fontBody_);
+  const int indentWidth = MeasureTextWidth(dc, ExpandTabsForDisplay(checkbox.indent));
+  SelectObject(dc, oldFont);
+  ReleaseDC(listBox_, dc);
+
+  RECT boxRc{};
+  boxRc.left = nameRc.left + indentWidth;
+  boxRc.top = rowRect.top + ((rowRect.bottom - rowRect.top) - 13) / 2;
+  boxRc.right = boxRc.left + 13;
+  boxRc.bottom = boxRc.top + 13;
+  if (!PtInRect(&boxRc, pt)) return false;
+
+  std::wstring errorMessage;
+  if (!ToggleMarkdownCheckbox(file, &errorMessage)) {
+    std::wstring message = L"Failed to update checkbox.\n\n" + errorMessage;
+    MessageBoxW(hwnd_, message.c_str(), L"MyBuddy", MB_OK | MB_ICONERROR);
+    return true;
+  }
+
+  RefreshGroup(groupIndex);
+  return true;
+}
+
 int App::HitTestRow(POINT pt) const {
   LRESULT hit = SendMessageW(listBox_, LB_ITEMFROMPOINT, 0, MAKELPARAM(pt.x, pt.y));
   if (HIWORD(hit) != 0) return -1;
@@ -1938,6 +2340,7 @@ void App::HandleListLeftClick(POINT pt) {
   }
 
   if (row.type != VisibleRow::Type::File) return;
+  if (TryToggleCheckboxAtPoint(row.groupIndex, row.fileIndex, rowRect, pt)) return;
   OpenFileNote(row.groupIndex, row.fileIndex);
 }
 
