@@ -314,11 +314,22 @@ std::wstring DecodeTextBytes(const std::string& bytes) {
   return L"";
 }
 
-std::wstring ReadTextFile(const std::wstring& path) {
+std::wstring ReadTextFilePrefix(const std::wstring& path, size_t maxBytes = 0) {
   std::ifstream in(path, std::ios::binary);
   if (!in) return L"";
-  std::string bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+  std::string bytes;
+  if (maxBytes == 0) {
+    bytes.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+  } else {
+    bytes.resize(maxBytes);
+    in.read(bytes.data(), static_cast<std::streamsize>(maxBytes));
+    bytes.resize(static_cast<size_t>(in.gcount()));
+  }
   return DecodeTextBytes(bytes);
+}
+
+std::wstring ReadTextFile(const std::wstring& path) {
+  return ReadTextFilePrefix(path, 0);
 }
 
 std::vector<std::wstring> SplitLines(const std::wstring& text) {
@@ -511,7 +522,7 @@ std::wstring TryParseTomlTitle(const std::vector<std::wstring>& lines, size_t& c
 }
 
 std::wstring ExtractNoteBaseName(const std::wstring& path) {
-  std::wstring text = ReadTextFile(path);
+  std::wstring text = ReadTextFilePrefix(path, 64 * 1024);
   std::vector<std::wstring> lines = SplitLines(text);
   std::wstring extension = ToLower(NormalizeExtension(path.substr(path.find_last_of(L'.'))));
 
@@ -544,7 +555,7 @@ std::wstring ExtractTextGroupTitle(const std::wstring& path) {
     return sourceStem.empty() ? sourceName : sourceStem;
   }
 
-  std::vector<std::wstring> lines = SplitLines(ReadTextFile(path));
+  std::vector<std::wstring> lines = SplitLines(ReadTextFilePrefix(path, 64 * 1024));
   size_t contentStart = 0;
   std::wstring title = TryParseTomlTitle(lines, contentStart);
   if (!title.empty()) return title;
@@ -580,7 +591,7 @@ std::wstring ExtractSingleFileGroupTitle(const std::wstring& path, NoteGroupType
 }
 
 std::wstring ExtractMarkdownDisplayName(const std::wstring& path, const std::wstring& fallback) {
-  std::vector<std::wstring> lines = SplitLines(ReadTextFile(path));
+  std::vector<std::wstring> lines = SplitLines(ReadTextFilePrefix(path, 64 * 1024));
   size_t contentStart = 0;
   std::wstring title = TryParseTomlTitle(lines, contentStart);
   if (!title.empty()) return title;
@@ -891,18 +902,8 @@ void LoadNoteFiles(const NoteGroupConfig& group, std::vector<NoteFile>& files, N
         file.dir = group.path;
         file.name = ffd.cFileName;
         file.stem = GetFileStem(file.name);
-        const size_t fileDot = file.name.find_last_of(L'.');
-        const std::wstring fileExtension = fileDot == std::wstring::npos
-          ? L""
-          : ToLower(NormalizeExtension(file.name.substr(fileDot)));
-        if (fileExtension == L".md") {
-          file.displayName = ExtractMarkdownDisplayName(fullPath, file.stem);
-          file.itemText = StripMarkdownLinePrefix(file.displayName);
-          if (file.itemText.empty()) file.itemText = file.stem;
-        } else {
-          file.displayName.clear();
-          file.itemText = file.stem;
-        }
+        file.displayName.clear();
+        file.itemText = file.stem;
         file.createdTime = ffd.ftCreationTime;
         file.modifiedTime = ffd.ftLastWriteTime;
         files.push_back(file);
@@ -1001,6 +1002,22 @@ void LoadNoteFiles(const NoteGroupConfig& group, std::vector<NoteFile>& files, N
   std::sort(files.begin(), files.end(), compare);
   if (!ignoreMaxItems && group.maxItems > 0 && static_cast<int>(files.size()) > group.maxItems) {
     files.resize(group.maxItems);
+  }
+  if (group.type == NoteGroupType::Directory) {
+    for (NoteFile& file : files) {
+      const size_t fileDot = file.name.find_last_of(L'.');
+      const std::wstring fileExtension = fileDot == std::wstring::npos
+        ? L""
+        : ToLower(NormalizeExtension(file.name.substr(fileDot)));
+      if (fileExtension == L".md") {
+        file.displayName = ExtractMarkdownDisplayName(file.path, file.stem);
+        file.itemText = StripMarkdownLinePrefix(file.displayName);
+        if (file.itemText.empty()) file.itemText = file.stem;
+      } else {
+        file.displayName.clear();
+        file.itemText = file.stem;
+      }
+    }
   }
   if (files.empty() && state) {
     *state = NoteGroupLoadState::Empty;
