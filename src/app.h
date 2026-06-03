@@ -57,6 +57,15 @@ private:
     int durationMs = 0;
   };
 
+  struct AutoRefreshWatcher {
+    HANDLE handle = nullptr;
+    std::wstring path;
+    int groupIndex = -1;
+    bool reloadConfig = false;
+    bool pending = false;
+    ULONGLONG dueTick = 0;
+  };
+
   static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
   static LRESULT CALLBACK HotZoneWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
   static LRESULT CALLBACK ListBoxProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
@@ -105,6 +114,10 @@ private:
   void DestroyFonts();
   void LayoutControls();
   void RefreshNotes(const std::unordered_map<std::wstring, bool>* expandedStateByGroupId = nullptr);
+  void DestroyAutoRefreshWatchers();
+  void RebuildAutoRefreshWatchers();
+  void PollAutoRefreshWatchers();
+  void ProcessPendingAutoRefreshes();
   void RebuildVisibleRows();
   void InvalidateList();
   void DrawListItem(const DRAWITEMSTRUCT* dis);
@@ -185,4 +198,5 @@ private:
   bool stateLoaded_ = false;
   bool listTooltipActive_ = false;
   int currentRowIndex_ = -1;
+  std::vector<AutoRefreshWatcher> autoRefreshWatchers_{};
 };

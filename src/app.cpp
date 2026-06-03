@@ -17,6 +17,7 @@ constexpr UINT kSingleInstanceShowMsg = WM_APP + 2;
 constexpr int kGlobalHotKeyId = 0xB001;
 constexpr UINT kAutoHideTimerId = 5001;
 constexpr UINT kAnimationTimerId = 5002;
+constexpr UINT kAutoRefreshTimerId = 5003;
 constexpr UINT kTrayIconId = 1001;
 constexpr UINT kTrayOpenCmd = 2001;
 constexpr UINT kTrayExitCmd = 2002;
@@ -37,6 +38,8 @@ constexpr int kSnapThresholdPx = 28;
 constexpr int kHotZoneThicknessPx = 2;
 constexpr int kAutoHideDelayMs = 420;
 constexpr int kAutoHidePollMs = 80;
+constexpr int kAutoRefreshPollMs = 125;
+constexpr int kAutoRefreshDebounceMs = 300;
 constexpr int kExpandDurationMs = 210;
 constexpr int kCollapseDurationMs = 300;
 constexpr int kAnimationTickMs = 16;
@@ -163,6 +166,11 @@ bool ParseHotKeySpec(const std::wstring& spec, UINT& modifiers, UINT& vk) {
 std::wstring GetFileNameFromPath(const std::wstring& path) {
   const size_t pos = path.find_last_of(L"\\/");
   return pos == std::wstring::npos ? path : path.substr(pos + 1);
+}
+
+std::wstring GetParentDirectory(const std::wstring& path) {
+  const size_t pos = path.find_last_of(L"\\/");
+  return pos == std::wstring::npos ? L"" : path.substr(0, pos);
 }
 
 std::wstring GetFileStemFromName(const std::wstring& name) {
@@ -868,6 +876,7 @@ LRESULT App::HandleMainMessage(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
       RefreshNotes();
       lastPointerInsideTick_ = GetTickCount64();
       SetTimer(hwnd_, kAutoHideTimerId, kAutoHidePollMs, nullptr);
+      SetTimer(hwnd_, kAutoRefreshTimerId, kAutoRefreshPollMs, nullptr);
       return 0;
     }
     case WM_SIZE:
@@ -936,6 +945,10 @@ LRESULT App::HandleMainMessage(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         PollAutoHide();
         return 0;
       }
+      if (wp == kAutoRefreshTimerId) {
+        PollAutoRefreshWatchers();
+        return 0;
+      }
       return 0;
     case WM_CONTEXTMENU:
       if (reinterpret_cast<HWND>(wp) == listBox_) {
@@ -974,7 +987,9 @@ LRESULT App::HandleMainMessage(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_DESTROY:
       KillTimer(hwnd_, kAnimationTimerId);
       KillTimer(hwnd_, kAutoHideTimerId);
+      KillTimer(hwnd_, kAutoRefreshTimerId);
       UnregisterHotKey(hwnd_, kGlobalHotKeyId);
+      DestroyAutoRefreshWatchers();
       DestroyHotZoneWindow();
       if (singleInstanceMutex_) {
         CloseHandle(singleInstanceMutex_);
@@ -1740,6 +1755,132 @@ void App::LayoutControls() {
   }
 }
 
+void App::DestroyAutoRefreshWatchers() {
+  for (AutoRefreshWatcher& watcher : autoRefreshWatchers_) {
+    if (watcher.handle && watcher.handle != INVALID_HANDLE_VALUE) {
+      FindCloseChangeNotification(watcher.handle);
+    }
+  }
+  autoRefreshWatchers_.clear();
+}
+
+void App::RebuildAutoRefreshWatchers() {
+  DestroyAutoRefreshWatchers();
+
+  const DWORD notifyFilter =
+    FILE_NOTIFY_CHANGE_FILE_NAME |
+    FILE_NOTIFY_CHANGE_DIR_NAME |
+    FILE_NOTIFY_CHANGE_SIZE |
+    FILE_NOTIFY_CHANGE_LAST_WRITE |
+    FILE_NOTIFY_CHANGE_CREATION;
+
+  auto addWatcher = [&](const std::wstring& path, int groupIndex, bool reloadConfig) {
+    if (path.empty()) return;
+    DWORD attrs = GetFileAttributesW(path.c_str());
+    if (attrs == INVALID_FILE_ATTRIBUTES || (attrs & FILE_ATTRIBUTE_DIRECTORY) == 0) return;
+
+    HANDLE handle = FindFirstChangeNotificationW(path.c_str(), FALSE, notifyFilter);
+    if (handle == INVALID_HANDLE_VALUE || handle == nullptr) return;
+
+    AutoRefreshWatcher watcher{};
+    watcher.handle = handle;
+    watcher.path = path;
+    watcher.groupIndex = groupIndex;
+    watcher.reloadConfig = reloadConfig;
+    autoRefreshWatchers_.push_back(std::move(watcher));
+  };
+
+  std::vector<std::wstring> configWatchDirs;
+  configWatchDirs.push_back(GetParentDirectory(GetProgramConfigPath()));
+  configWatchDirs.push_back(GetParentDirectory(GetFallbackConfigPath()));
+  for (const std::wstring& dir : configWatchDirs) {
+    if (dir.empty()) continue;
+    bool exists = false;
+    for (const AutoRefreshWatcher& watcher : autoRefreshWatchers_) {
+      if (watcher.reloadConfig && _wcsicmp(watcher.path.c_str(), dir.c_str()) == 0) {
+        exists = true;
+        break;
+      }
+    }
+    if (!exists) addWatcher(dir, -1, true);
+  }
+
+  for (int i = 0; i < static_cast<int>(notesConfig_.groups.size()); ++i) {
+    const NoteGroupConfig& group = notesConfig_.groups[i];
+    std::wstring watchPath = group.type == NoteGroupType::Directory
+      ? group.path
+      : GetParentDirectory(group.path);
+    if (watchPath.empty()) continue;
+
+    DWORD attrs = GetFileAttributesW(watchPath.c_str());
+    if (attrs == INVALID_FILE_ATTRIBUTES || (attrs & FILE_ATTRIBUTE_DIRECTORY) == 0) {
+      if (group.type == NoteGroupType::Directory) {
+        watchPath = GetParentDirectory(group.path);
+      }
+    }
+    addWatcher(watchPath, i, false);
+  }
+}
+
+void App::PollAutoRefreshWatchers() {
+  const ULONGLONG now = GetTickCount64();
+  for (AutoRefreshWatcher& watcher : autoRefreshWatchers_) {
+    if (!watcher.handle || watcher.handle == INVALID_HANDLE_VALUE) continue;
+
+    DWORD waitResult = WaitForSingleObject(watcher.handle, 0);
+    if (waitResult == WAIT_OBJECT_0) {
+      watcher.pending = true;
+      watcher.dueTick = now + kAutoRefreshDebounceMs;
+      if (!FindNextChangeNotification(watcher.handle)) {
+        FindCloseChangeNotification(watcher.handle);
+        watcher.handle = INVALID_HANDLE_VALUE;
+      }
+    } else if (waitResult == WAIT_FAILED) {
+      FindCloseChangeNotification(watcher.handle);
+      watcher.handle = INVALID_HANDLE_VALUE;
+    }
+  }
+
+  ProcessPendingAutoRefreshes();
+}
+
+void App::ProcessPendingAutoRefreshes() {
+  const ULONGLONG now = GetTickCount64();
+  bool reloadConfig = false;
+  std::vector<int> dirtyGroups;
+
+  for (AutoRefreshWatcher& watcher : autoRefreshWatchers_) {
+    if (!watcher.pending || now < watcher.dueTick) continue;
+    watcher.pending = false;
+    watcher.dueTick = 0;
+    if (watcher.reloadConfig) {
+      reloadConfig = true;
+    } else if (watcher.groupIndex >= 0) {
+      dirtyGroups.push_back(watcher.groupIndex);
+    }
+  }
+
+  if (reloadConfig) {
+    ReloadConfigAndRefreshNotes();
+    return;
+  }
+  if (dirtyGroups.empty()) return;
+
+  std::sort(dirtyGroups.begin(), dirtyGroups.end());
+  dirtyGroups.erase(std::unique(dirtyGroups.begin(), dirtyGroups.end()), dirtyGroups.end());
+
+  for (int groupIndex : dirtyGroups) {
+    if (groupIndex < 0 || groupIndex >= static_cast<int>(notesConfig_.groups.size())) continue;
+    NoteGroupLoadState state = NoteGroupLoadState::Ok;
+    bool showAll = groupIndex < static_cast<int>(showAllGroups_.size()) && showAllGroups_[groupIndex];
+    LoadNoteFiles(notesConfig_.groups[groupIndex], notesByGroup_[groupIndex], &state, showAll);
+    groupStates_[groupIndex] = state;
+  }
+
+  RebuildVisibleRows();
+  RebuildAutoRefreshWatchers();
+}
+
 void App::RefreshNotes(const std::unordered_map<std::wstring, bool>* expandedStateByGroupId) {
   std::unordered_map<std::wstring, bool> showAllStateByGroupId;
   const int oldCount = static_cast<int>(std::min(notesConfig_.groups.size(), showAllGroups_.size()));
@@ -1775,6 +1916,7 @@ void App::RefreshNotes(const std::unordered_map<std::wstring, bool>* expandedSta
     showAllGroups_.push_back(showAll);
   }
   RebuildVisibleRows();
+  RebuildAutoRefreshWatchers();
 }
 
 void App::ReloadConfigAndRefreshNotes() {
@@ -1795,6 +1937,7 @@ void App::RefreshGroup(int groupIndex) {
   LoadNoteFiles(notesConfig_.groups[groupIndex], notesByGroup_[groupIndex], &state, showAll);
   groupStates_[groupIndex] = state;
   RebuildVisibleRows();
+  RebuildAutoRefreshWatchers();
 }
 
 void App::RebuildVisibleRows() {
