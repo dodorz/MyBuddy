@@ -178,6 +178,10 @@ std::wstring GetFileStemFromName(const std::wstring& name) {
   return pos == std::wstring::npos ? name : name.substr(0, pos);
 }
 
+bool IsSingleFileLineGroupType(NoteGroupType type) {
+  return type == NoteGroupType::TextLines || type == NoteGroupType::TodoTxt;
+}
+
 App::ToolbarScope ParseToolbarScope(const std::wstring& value) {
   const std::wstring normalized = ToLower(Trim(value));
   if (normalized == L"group") return App::ToolbarScope::Group;
@@ -428,7 +432,7 @@ MarkdownLine ParseMarkdownLine(const std::wstring& text) {
 }
 
 bool BuildGroupSourceFile(const NoteGroupConfig& group, NoteFile& file) {
-  if (group.type != NoteGroupType::TextLines) return false;
+  if (!IsSingleFileLineGroupType(group.type)) return false;
   WIN32_FILE_ATTRIBUTE_DATA data{};
   if (!GetFileAttributesExW(group.path.c_str(), GetFileExInfoStandard, &data)) return false;
   file = NoteFile{};
@@ -658,7 +662,9 @@ std::wstring GetGroupStatusMessage(NoteGroupLoadState state, const NoteGroupConf
     case NoteGroupLoadState::Empty:
       return group.type == NoteGroupType::Directory
         ? L"No matching notes in this group."
-        : L"No non-empty lines in this group file.";
+        : (group.type == NoteGroupType::TodoTxt
+            ? L"No non-empty tasks in this group file."
+            : L"No non-empty lines in this group file.");
     case NoteGroupLoadState::Ok:
     default:
       return L"";
@@ -1894,7 +1900,7 @@ void App::RefreshNotes(const std::unordered_map<std::wstring, bool>* expandedSta
   showAllGroups_.clear();
   globalStatusMessage_.clear();
   if (notesConfig_.groups.empty()) {
-    globalStatusMessage_ = L"No note groups configured. Add [dirgroup.<id>] or [textgroup.<id>] sections to config.ini.";
+    globalStatusMessage_ = L"No note groups configured. Add [dirgroup.<id>], [textgroup.<id>], or [todogroup.<id>] sections to config.ini.";
   }
   for (const NoteGroupConfig& group : notesConfig_.groups) {
     std::vector<NoteFile> files;
@@ -2032,10 +2038,10 @@ std::wstring App::GetGroupHotTooltip(int rowIndex, POINT pt) const {
   const NoteGroupConfig& group = notesConfig_.groups[row.groupIndex];
   const RECT rowRect = GetRowRect(rowIndex);
   const bool supportsNewNotes = group.type == NoteGroupType::Directory;
-  const bool supportsShowAll = group.type == NoteGroupType::TextLines && group.maxItems > 0 &&
+  const bool supportsShowAll = IsSingleFileLineGroupType(group.type) && group.maxItems > 0 &&
     row.groupIndex < static_cast<int>(showAllGroups_.size());
   NoteFile sourceFile{};
-  const bool supportsOpen = group.type == NoteGroupType::TextLines &&
+  const bool supportsOpen = IsSingleFileLineGroupType(group.type) &&
     !group.defaultFileAction.empty() &&
     BuildGroupSourceFile(group, sourceFile);
 
@@ -2124,11 +2130,11 @@ void App::DrawListItem(const DRAWITEMSTRUCT* dis) {
   } else if (row.type == VisibleRow::Type::Group) {
     const NoteGroupConfig& group = notesConfig_.groups[row.groupIndex];
     const bool supportsNewNotes = group.type == NoteGroupType::Directory;
-    const bool supportsShowAll = group.type == NoteGroupType::TextLines && group.maxItems > 0 &&
+    const bool supportsShowAll = IsSingleFileLineGroupType(group.type) && group.maxItems > 0 &&
       row.groupIndex < static_cast<int>(showAllGroups_.size());
     const bool showAllEnabled = supportsShowAll && showAllGroups_[row.groupIndex];
     NoteFile sourceFile{};
-    const bool supportsOpen = group.type == NoteGroupType::TextLines &&
+    const bool supportsOpen = IsSingleFileLineGroupType(group.type) &&
       !group.defaultFileAction.empty() &&
       BuildGroupSourceFile(group, sourceFile);
     RECT toggleRc = GetGroupToggleRect(rc);
@@ -2188,7 +2194,7 @@ void App::DrawListItem(const DRAWITEMSTRUCT* dis) {
     const std::wstring& displayName = file.displayName.empty()
       ? (group.showExtensions ? file.name : file.stem)
       : file.displayName;
-    if (group.type == NoteGroupType::TextLines) {
+    if (IsSingleFileLineGroupType(group.type)) {
       nameRc.right = timeRc.right - 32;
       MarkdownCheckbox checkbox = ParseMarkdownCheckbox(displayName);
       if (checkbox.state == MarkdownCheckbox::State::None) {
@@ -2330,7 +2336,7 @@ bool App::ResolveToolbarContext(const ToolbarButtonConfig& button, int& groupInd
     return true;
   }
 
-  if (group.type == NoteGroupType::TextLines && BuildGroupSourceFile(group, file)) {
+  if (IsSingleFileLineGroupType(group.type) && BuildGroupSourceFile(group, file)) {
     filePtr = &file;
     return true;
   }
@@ -2402,7 +2408,7 @@ bool App::TryToggleCheckboxAtPoint(int groupIndex, int fileIndex, const RECT& ro
   if (fileIndex < 0 || fileIndex >= static_cast<int>(notesByGroup_[groupIndex].size())) return false;
 
   const NoteGroupConfig& group = notesConfig_.groups[groupIndex];
-  if (group.type != NoteGroupType::TextLines || !listBox_) return false;
+  if (!IsSingleFileLineGroupType(group.type) || !listBox_) return false;
 
   const NoteFile& file = notesByGroup_[groupIndex][fileIndex];
   const std::wstring& displayName = file.displayName.empty()
@@ -2432,7 +2438,10 @@ bool App::TryToggleCheckboxAtPoint(int groupIndex, int fileIndex, const RECT& ro
   if (!PtInRect(&boxRc, pt)) return false;
 
   std::wstring errorMessage;
-  if (!ToggleMarkdownCheckbox(file, &errorMessage)) {
+  const bool toggled = group.type == NoteGroupType::TodoTxt
+    ? ToggleTodoTxtTask(file, &errorMessage)
+    : ToggleMarkdownCheckbox(file, &errorMessage);
+  if (!toggled) {
     std::wstring message = L"Failed to update checkbox.\n\n" + errorMessage;
     MessageBoxW(hwnd_, message.c_str(), L"MyBuddy", MB_OK | MB_ICONERROR);
     return true;
@@ -2461,7 +2470,7 @@ void App::HandleListLeftClick(POINT pt) {
   if (row.type == VisibleRow::Type::Group) {
     const NoteGroupConfig& group = notesConfig_.groups[row.groupIndex];
     const bool supportsNewNotes = group.type == NoteGroupType::Directory;
-    const bool supportsShowAll = group.type == NoteGroupType::TextLines && group.maxItems > 0 &&
+    const bool supportsShowAll = IsSingleFileLineGroupType(group.type) && group.maxItems > 0 &&
       row.groupIndex < static_cast<int>(showAllGroups_.size());
     RECT showAllRc = GetGroupShowAllRect(rowRect);
     RECT openRc = GetGroupOpenRect(rowRect);
@@ -2470,7 +2479,7 @@ void App::HandleListLeftClick(POINT pt) {
     RECT toggleRc = GetGroupToggleRect(rowRect);
     if (supportsShowAll && PtInRect(&showAllRc, pt)) {
       ShowAllForGroup(row.groupIndex);
-    } else if (group.type == NoteGroupType::TextLines && PtInRect(&openRc, pt)) {
+    } else if (IsSingleFileLineGroupType(group.type) && PtInRect(&openRc, pt)) {
       OpenGroupNote(row.groupIndex);
     } else if (supportsNewNotes && PtInRect(&addRc, pt)) {
       CreateNoteForGroup(row.groupIndex);
@@ -2517,7 +2526,7 @@ void App::ToggleGroup(int groupIndex) {
 
 void App::ShowAllForGroup(int groupIndex) {
   if (groupIndex < 0 || groupIndex >= static_cast<int>(notesConfig_.groups.size())) return;
-  if (notesConfig_.groups[groupIndex].type != NoteGroupType::TextLines) return;
+  if (!IsSingleFileLineGroupType(notesConfig_.groups[groupIndex].type)) return;
   if (notesConfig_.groups[groupIndex].maxItems == 0) return;
   if (groupIndex >= static_cast<int>(showAllGroups_.size())) return;
   showAllGroups_[groupIndex] = !showAllGroups_[groupIndex];
@@ -2527,7 +2536,7 @@ void App::ShowAllForGroup(int groupIndex) {
 void App::OpenGroupNote(int groupIndex) {
   if (groupIndex < 0 || groupIndex >= static_cast<int>(notesConfig_.groups.size())) return;
   const NoteGroupConfig& group = notesConfig_.groups[groupIndex];
-  if (group.type != NoteGroupType::TextLines || group.defaultFileAction.empty()) return;
+  if (!IsSingleFileLineGroupType(group.type) || group.defaultFileAction.empty()) return;
   auto actionIt = notesConfig_.actions.find(group.defaultFileAction);
   if (actionIt == notesConfig_.actions.end()) return;
   NoteFile file{};
@@ -2718,7 +2727,7 @@ void App::DeleteFileNote(int groupIndex, int fileIndex) {
 void App::DeleteTextGroupSource(int groupIndex) {
   if (groupIndex < 0 || groupIndex >= static_cast<int>(notesConfig_.groups.size())) return;
   const NoteGroupConfig& group = notesConfig_.groups[groupIndex];
-  if (group.type != NoteGroupType::TextLines) return;
+  if (!IsSingleFileLineGroupType(group.type)) return;
   NoteFile sourceFile{};
   const bool hasSourceFile = BuildGroupSourceFile(group, sourceFile);
 
@@ -2754,7 +2763,7 @@ void App::RunGroupMenu(int groupIndex, POINT screenPt) {
   const NoteGroupConfig& group = notesConfig_.groups[groupIndex];
   const bool supportsNewNotes = group.type == NoteGroupType::Directory;
   NoteFile sourceFile{};
-  const bool hasSourceFile = group.type == NoteGroupType::TextLines && BuildGroupSourceFile(group, sourceFile);
+  const bool hasSourceFile = IsSingleFileLineGroupType(group.type) && BuildGroupSourceFile(group, sourceFile);
   HMENU menu = CreatePopupMenu();
   if (!menu) return;
   constexpr UINT kMenuNew = 4001;

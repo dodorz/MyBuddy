@@ -68,6 +68,7 @@ ActionTarget ParseActionTarget(const std::wstring& value, ActionTarget fallback)
 NoteGroupType ParseGroupType(const std::wstring& value, NoteGroupType fallback) {
   if (value == L"dir" || value == L"directory") return NoteGroupType::Directory;
   if (value == L"text") return NoteGroupType::TextLines;
+  if (value == L"todo" || value == L"todotxt") return NoteGroupType::TodoTxt;
   return fallback;
 }
 
@@ -82,11 +83,20 @@ bool ParseGroupSection(const std::wstring& section, std::wstring& id, NoteGroupT
     type = NoteGroupType::TextLines;
     return true;
   }
+  if (section.rfind(L"todogroup.", 0) == 0) {
+    id = section.substr(10);
+    type = NoteGroupType::TodoTxt;
+    return true;
+  }
   if (section.rfind(L"note_group.", 0) == 0) {
     id = section.substr(11);
     return true;
   }
   return false;
+}
+
+bool IsSingleFileLineGroupType(NoteGroupType type) {
+  return type == NoteGroupType::TextLines || type == NoteGroupType::TodoTxt;
 }
 
 NoteSortBy NormalizeSortByForGroupType(NoteGroupType type, NoteSortBy value, NoteSortBy fallback) {
@@ -226,6 +236,43 @@ std::wstring StripMarkdownLinePrefix(std::wstring value) {
   }
 
   return value;
+}
+
+bool IsIsoDateToken(const std::wstring& token) {
+  if (token.size() != 10) return false;
+  for (size_t i = 0; i < token.size(); ++i) {
+    if (i == 4 || i == 7) {
+      if (token[i] != L'-') return false;
+      continue;
+    }
+    if (!iswdigit(token[i])) return false;
+  }
+  return true;
+}
+
+std::wstring ConsumeTodoTxtDateToken(std::wstring text) {
+  text = Trim(text);
+  const size_t space = text.find_first_of(L" \t");
+  const std::wstring token = space == std::wstring::npos ? text : text.substr(0, space);
+  if (!IsIsoDateToken(token)) return text;
+  return space == std::wstring::npos ? L"" : Trim(text.substr(space + 1));
+}
+
+std::wstring RenderTodoTxtTaskDisplay(const std::wstring& rawLine) {
+  const std::wstring trimmed = TrimRight(rawLine);
+  std::wstring text = Trim(trimmed);
+  if (text.empty()) return L"";
+
+  bool completed = false;
+  if (text.size() >= 2 && text[0] == L'x' && iswspace(text[1])) {
+    completed = true;
+    text = Trim(text.substr(2));
+    text = ConsumeTodoTxtDateToken(text);
+    text = ConsumeTodoTxtDateToken(text);
+  }
+
+  if (text.empty()) text = Trim(trimmed);
+  return completed ? (L"- [x] " + text) : (L"- [ ] " + text);
 }
 
 std::wstring SanitizeFileBaseName(std::wstring value) {
@@ -441,11 +488,18 @@ std::wstring TryParseTomlTitle(const std::vector<std::wstring>& lines, size_t& c
       contentStartLine = i + 1;
       break;
     }
-    auto eq = line.find(L'=');
-    if (eq == std::wstring::npos) continue;
-    std::wstring key = Trim(line.substr(0, eq));
+    size_t separator = line.find(L'=');
+    size_t valueStart = 0;
+    if (separator != std::wstring::npos) {
+      valueStart = separator + 1;
+    } else {
+      separator = line.find(L':');
+      if (separator == std::wstring::npos) continue;
+      valueStart = separator + 1;
+    }
+    std::wstring key = Trim(line.substr(0, separator));
     if (ToLower(key) != L"title") continue;
-    std::wstring value = Trim(line.substr(eq + 1));
+    std::wstring value = Trim(line.substr(valueStart));
     if (value.size() >= 2 &&
         ((value.front() == L'"' && value.back() == L'"') ||
          (value.front() == L'\'' && value.back() == L'\''))) {
@@ -514,6 +568,14 @@ std::wstring ExtractTextGroupTitle(const std::wstring& path) {
     }
   }
 
+  return sourceStem.empty() ? sourceName : sourceStem;
+}
+
+std::wstring ExtractSingleFileGroupTitle(const std::wstring& path, NoteGroupType type) {
+  if (type == NoteGroupType::TextLines) return ExtractTextGroupTitle(path);
+  const size_t slash = path.find_last_of(L"\\/");
+  const std::wstring sourceName = slash == std::wstring::npos ? path : path.substr(slash + 1);
+  const std::wstring sourceStem = GetFileStem(sourceName);
   return sourceStem.empty() ? sourceName : sourceStem;
 }
 
@@ -770,8 +832,8 @@ bool LoadNotesConfig(const std::wstring& path, NotesConfig& config) {
         group.type = ParseGroupType(ReadString(ini, section.c_str(), L"type", L"dir"), group.type);
       }
       if (group.title.empty()) {
-        if (group.type == NoteGroupType::TextLines && !group.path.empty()) {
-          group.title = ExtractTextGroupTitle(group.path);
+        if (IsSingleFileLineGroupType(group.type) && !group.path.empty()) {
+          group.title = ExtractSingleFileGroupTitle(group.path, group.type);
         }
         if (group.title.empty()) group.title = group.id;
       }
@@ -863,31 +925,50 @@ void LoadNoteFiles(const NoteGroupConfig& group, std::vector<NoteFile>& files, N
     const std::wstring sourceName = group.path.substr(group.path.find_last_of(L"\\/") + 1);
     const std::wstring sourceStem = GetFileStem(sourceName);
     const std::wstring sourceDir = GetParentDir(group.path);
-    size_t contentStart = 0;
-    const std::wstring sourceExtension = ToLower(NormalizeExtension(group.path.substr(group.path.find_last_of(L'.'))));
-    if (sourceExtension == L".md") {
-      TryFindTomlFrontMatter(lines, contentStart);
-      size_t firstContentLine = contentStart;
-      while (firstContentLine < lines.size() && Trim(lines[firstContentLine]).empty()) ++firstContentLine;
-      if (firstContentLine < lines.size() && Trim(lines[firstContentLine]).rfind(L"# ", 0) == 0) {
-        contentStart = firstContentLine + 1;
-      }
-    }
-    for (size_t i = contentStart; i < lines.size(); ++i) {
-      if (Trim(lines[i]).empty()) continue;
-      std::wstring text = TrimRight(lines[i]);
+    if (group.type == NoteGroupType::TodoTxt) {
+      for (size_t i = 0; i < lines.size(); ++i) {
+        std::wstring rawText = TrimRight(lines[i]);
+        if (Trim(rawText).empty()) continue;
 
-      NoteFile file{};
-      file.path = group.path;
-      file.dir = sourceDir;
-      file.name = sourceName;
-      file.stem = sourceStem;
-      file.displayName = text;
-      file.itemText = text;
-      file.lineNumber = static_cast<int>(i + 1);
-      file.createdTime = data.ftCreationTime;
-      file.modifiedTime = data.ftLastWriteTime;
-      files.push_back(file);
+        NoteFile file{};
+        file.path = group.path;
+        file.dir = sourceDir;
+        file.name = sourceName;
+        file.stem = sourceStem;
+        file.displayName = RenderTodoTxtTaskDisplay(rawText);
+        file.itemText = rawText;
+        file.lineNumber = static_cast<int>(i + 1);
+        file.createdTime = data.ftCreationTime;
+        file.modifiedTime = data.ftLastWriteTime;
+        files.push_back(file);
+      }
+    } else {
+      size_t contentStart = 0;
+      const std::wstring sourceExtension = ToLower(NormalizeExtension(group.path.substr(group.path.find_last_of(L'.'))));
+      if (sourceExtension == L".md") {
+        TryFindTomlFrontMatter(lines, contentStart);
+        size_t firstContentLine = contentStart;
+        while (firstContentLine < lines.size() && Trim(lines[firstContentLine]).empty()) ++firstContentLine;
+        if (firstContentLine < lines.size() && Trim(lines[firstContentLine]).rfind(L"# ", 0) == 0) {
+          contentStart = firstContentLine + 1;
+        }
+      }
+      for (size_t i = contentStart; i < lines.size(); ++i) {
+        if (Trim(lines[i]).empty()) continue;
+        std::wstring text = TrimRight(lines[i]);
+
+        NoteFile file{};
+        file.path = group.path;
+        file.dir = sourceDir;
+        file.name = sourceName;
+        file.stem = sourceStem;
+        file.displayName = text;
+        file.itemText = text;
+        file.lineNumber = static_cast<int>(i + 1);
+        file.createdTime = data.ftCreationTime;
+        file.modifiedTime = data.ftLastWriteTime;
+        files.push_back(file);
+      }
     }
   }
 
@@ -944,6 +1025,47 @@ bool ToggleMarkdownCheckbox(const NoteFile& file, std::wstring* errorMessage) {
   if (!ToggleMarkdownCheckboxLine(lines[index])) {
     if (errorMessage) *errorMessage = L"Target line is not a markdown checkbox.";
     return false;
+  }
+
+  return WriteEditableTextFile(file.path, textFile, lines, errorMessage);
+}
+
+bool ToggleTodoTxtTask(const NoteFile& file, std::wstring* errorMessage) {
+  if (file.path.empty() || file.lineNumber <= 0) {
+    if (errorMessage) *errorMessage = L"Invalid task item.";
+    return false;
+  }
+
+  EditableTextFile textFile{};
+  if (!ReadEditableTextFile(file.path, textFile, errorMessage)) return false;
+
+  std::vector<std::wstring> lines = SplitLines(textFile.text);
+  const size_t index = static_cast<size_t>(file.lineNumber - 1);
+  if (index >= lines.size()) {
+    if (errorMessage) *errorMessage = L"Target line is out of range.";
+    return false;
+  }
+
+  std::wstring line = TrimRight(lines[index]);
+  size_t indentEnd = 0;
+  while (indentEnd < line.size() && (line[indentEnd] == L' ' || line[indentEnd] == L'\t')) ++indentEnd;
+  const std::wstring indent = line.substr(0, indentEnd);
+  std::wstring body = Trim(line.substr(indentEnd));
+  if (body.empty()) {
+    if (errorMessage) *errorMessage = L"Target line is empty.";
+    return false;
+  }
+
+  if (body.size() >= 2 && body[0] == L'x' && iswspace(body[1])) {
+    body = Trim(body.substr(2));
+    body = ConsumeTodoTxtDateToken(body);
+    lines[index] = indent + body;
+  } else {
+    SYSTEMTIME st{};
+    GetLocalTime(&st);
+    wchar_t date[16];
+    wsprintfW(date, L"%04d-%02d-%02d", st.wYear, st.wMonth, st.wDay);
+    lines[index] = indent + L"x " + date + L" " + body;
   }
 
   return WriteEditableTextFile(file.path, textFile, lines, errorMessage);

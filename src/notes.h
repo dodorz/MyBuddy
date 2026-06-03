@@ -32,6 +32,7 @@ enum class ActionTarget {
 enum class NoteGroupType {
   Directory,
   TextLines,
+  TodoTxt,
 };
 
 struct ActionConfig {
@@ -110,6 +111,7 @@ bool LoadNotesConfig(const std::wstring& path, NotesConfig& config);
 void LoadNoteFiles(const NoteGroupConfig& group, std::vector<NoteFile>& files, NoteGroupLoadState* state = nullptr,
   bool ignoreMaxItems = false);
 bool ToggleMarkdownCheckbox(const NoteFile& file, std::wstring* errorMessage = nullptr);
+bool ToggleTodoTxtTask(const NoteFile& file, std::wstring* errorMessage = nullptr);
 bool CreateNoteInGroup(const NoteGroupConfig& group, std::wstring& createdPath, std::wstring* errorMessage = nullptr);
 bool CreateTempNoteForGroup(const NoteGroupConfig& group, std::wstring& createdPath, std::wstring* errorMessage = nullptr);
 bool MoveTempNoteIntoGroup(const NoteGroupConfig& group, const std::wstring& sourcePath, std::wstring& finalPath, std::wstring* errorMessage = nullptr);

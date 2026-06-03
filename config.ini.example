@@ -156,6 +156,16 @@ defaultFileAction=Edit
 fileActions=Reveal
 groupActions=Terminal
 
+[todogroup.tasks]
+; Path points to one todo.txt file for todo groups.
+path=C:\Users\USERNAME\Documents\Notes\todo.txt
+; todo groups usually keep file order.
+sortBy=line
+defaultFileAction=Edit
+; deleteCommand=some-tool.exe "{file}"
+fileActions=Reveal
+groupActions=Terminal
+
 [dirgroup.work]
 ; If omitted, the group id "work" is used as the title.
 title=Work
