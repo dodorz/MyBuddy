@@ -1,5 +1,6 @@
 #include "app.h"
 
+#include "ini.h"
 #include "resource.h"
 #include "state.h"
 
@@ -45,12 +46,6 @@ std::wstring EnsureTrailingSlash(std::wstring path) {
   return path;
 }
 
-std::wstring ReadIniString(const std::wstring& path, const wchar_t* section, const wchar_t* key, const wchar_t* def = L"") {
-  wchar_t buffer[512];
-  GetPrivateProfileStringW(section, key, def, buffer, static_cast<DWORD>(std::size(buffer)), path.c_str());
-  return buffer;
-}
-
 std::wstring Trim(std::wstring value) {
   size_t start = 0;
   while (start < value.size() && iswspace(value[start])) ++start;
@@ -84,20 +79,6 @@ std::vector<std::wstring> SplitSemicolonList(const std::wstring& value) {
   std::wstring token = Trim(current);
   if (!token.empty()) parts.push_back(token);
   return parts;
-}
-
-std::vector<std::wstring> ReadIniSectionNames(const std::wstring& path) {
-  std::vector<std::wstring> sections;
-  std::vector<wchar_t> buffer(65536);
-  DWORD len = GetPrivateProfileSectionNamesW(buffer.data(), static_cast<DWORD>(buffer.size()), path.c_str());
-  if (len == 0) return sections;
-
-  const wchar_t* ptr = buffer.data();
-  while (*ptr) {
-    sections.emplace_back(ptr);
-    ptr += wcslen(ptr) + 1;
-  }
-  return sections;
 }
 
 std::vector<std::wstring> SplitHotKeySpec(const std::wstring& spec) {
@@ -852,7 +833,14 @@ bool App::LoadConfig() {
   }
   currentConfigPath_ = path;
 
-  hotKeySpec_ = ReadIniString(path, L"app", L"globalHotKey", L"Ctrl+Alt+B");
+  IniFile ini;
+  if (!ini.LoadUtf8(path)) {
+    toolbarButtons_.clear();
+    notesConfig_ = NotesConfig{};
+    return false;
+  }
+
+  hotKeySpec_ = ini.GetString(L"app", L"globalHotKey", L"Ctrl+Alt+B");
   if (!ParseHotKeySpec(hotKeySpec_, hotKeyModifiers_, hotKeyVk_)) {
     hotKeySpec_ = L"Ctrl+Alt+B";
     hotKeyModifiers_ = MOD_CONTROL | MOD_ALT;
@@ -860,9 +848,9 @@ bool App::LoadConfig() {
   }
 
   std::vector<ToolbarButtonConfig> loadedToolbarButtons;
-  std::vector<std::wstring> toolbarButtonIds = SplitSemicolonList(ReadIniString(path, L"toolbar", L"buttons"));
+  std::vector<std::wstring> toolbarButtonIds = SplitSemicolonList(ini.GetString(L"toolbar", L"buttons"));
   if (toolbarButtonIds.empty()) {
-    for (const std::wstring& section : ReadIniSectionNames(path)) {
+    for (const std::wstring& section : ini.GetSectionNames()) {
       if (section.rfind(L"toolbar_button.", 0) == 0 && section.size() > 15) {
         toolbarButtonIds.push_back(section.substr(15));
       }
@@ -872,10 +860,10 @@ bool App::LoadConfig() {
     const std::wstring section = L"toolbar_button." + buttonId;
     ToolbarButtonConfig button{};
     button.id = buttonId;
-    button.title = ReadIniString(path, section.c_str(), L"title", buttonId.c_str());
-    button.icon = ToLower(ReadIniString(path, section.c_str(), L"icon"));
-    button.command = ReadIniString(path, section.c_str(), L"command");
-    button.scope = ParseToolbarScope(ReadIniString(path, section.c_str(), L"scope", L"global"));
+    button.title = ini.GetString(section, L"title", buttonId);
+    button.icon = ToLower(ini.GetString(section, L"icon"));
+    button.command = ini.GetString(section, L"command");
+    button.scope = ParseToolbarScope(ini.GetString(section, L"scope", L"global"));
     if (button.command.empty() || !IsSupportedToolbarIcon(button.icon)) continue;
     loadedToolbarButtons.push_back(std::move(button));
   }
@@ -1487,7 +1475,7 @@ void App::RefreshNotes(const std::unordered_map<std::wstring, bool>* expandedSta
   showAllGroups_.clear();
   globalStatusMessage_.clear();
   if (notesConfig_.groups.empty()) {
-    globalStatusMessage_ = L"No note groups configured. Add [note_group.<id>] sections to config.ini.";
+    globalStatusMessage_ = L"No note groups configured. Add [dirgroup.<id>] or [textgroup.<id>] sections to config.ini.";
   }
   for (const NoteGroupConfig& group : notesConfig_.groups) {
     std::vector<NoteFile> files;

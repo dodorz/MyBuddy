@@ -2,6 +2,8 @@
 
 This document defines the `config.ini` format for the notes feature.
 
+The config file must be saved as UTF-8 without BOM.
+
 ## Overview
 
 - Each note group maps either to one directory or to one text file.
@@ -89,16 +91,15 @@ command=explorer.exe /select,"{file}"
 title=终端打开本组
 command=wt.exe -d "{group_dir}"
 
-[note_group.todo]
+[textgroup.todo]
 title=待办
-type=text
 path=D:\Notes\todo.txt
 sortBy=line
 defaultFileAction=Edit
 fileActions=reveal
 groupActions=terminal
 
-[note_group.work]
+[dirgroup.work]
 title=工作
 path=D:\Notes\Work
 expanded=1
@@ -112,7 +113,7 @@ defaultFileAction=Edit
 fileActions=Edit;reveal
 groupActions=terminal
 
-[note_group.personal]
+[dirgroup.personal]
 title=个人
 path=D:\Notes\Personal
 expanded=0
@@ -155,7 +156,7 @@ Optional section names:
 - `[notes_dir_default]`
 - `[notes_text_default]`
 
-These sections inherit from `[notes_default]`, then `[note_group.<id>]` can override again.
+These sections inherit from `[notes_default]`, then each `[dirgroup.<id>]` or `[textgroup.<id>]` section can override again.
 
 Supported keys for `[notes_dir_default]`:
 
@@ -242,24 +243,23 @@ command="C:\Program Files\Notepad++\notepad++.exe" "{file}"
 
 ## Group Sections
 
-Section format: `[note_group.<id>]`
+Section formats:
+
+- `[dirgroup.<id>]`
+- `[textgroup.<id>]`
+
+Legacy `[note_group.<id>]` is still accepted for compatibility.
 
 Required keys:
 
 - `path`
-  - `directory` groups: one directory path
-  - `text` groups: one text file path
+  - `dirgroup`: one directory path
+  - `textgroup`: one text file path
 
 Optional keys:
 
-- `type`
-  - Supported: `dir`, `text`
-  - Default: `dir`
-  - `dir`: path is a directory, files become items
-  - `text`: path is one text file, non-empty lines become items
-
 - `title`
-  - If missing, defaults to the group id from `[note_group.<id>]`
+  - If missing, defaults to the group id from the section name
 
 - `expanded`
   - `1` or `0`

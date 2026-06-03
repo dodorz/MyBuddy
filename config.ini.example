@@ -2,6 +2,7 @@
 ; Search order:
 ; 1. config.ini beside MyBuddy.exe
 ; 2. %AppData%\MyBuddy\config.ini
+; Save this file as UTF-8 without BOM.
 
 [app]
 ; Global hotkey used to show the window.
@@ -107,7 +108,7 @@ command=explorer.exe /select,"{file}"
 ; If omitted, the action id "Terminal" is used as the title.
 command=wt.exe -d "{group_dir}"
 
-[note_group.inbox]
+[dirgroup.inbox]
 ; Group title shown in the main list.
 title=Inbox
 ; Absolute directory path for this group.
@@ -145,10 +146,7 @@ path=C:\Users\USERNAME\Documents\Notes\Inbox
 ; Must reference [dir_action.*] sections.
 ; groupActions=Terminal
 
-[note_group.todo_lines]
-; Group type.
-; Allowed values: dir, text
-type=text
+[textgroup.todo_lines]
 ; Path points to one text file for text groups.
 path=C:\Users\USERNAME\Documents\Notes\todo.txt
 ; text groups usually keep file order.
@@ -158,7 +156,7 @@ defaultFileAction=Edit
 fileActions=Reveal
 groupActions=Terminal
 
-[note_group.work]
+[dirgroup.work]
 ; If omitted, the group id "work" is used as the title.
 title=Work
 path=C:\Users\USERNAME\Documents\Notes\Work

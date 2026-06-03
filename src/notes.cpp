@@ -1,5 +1,7 @@
 #include "notes.h"
 
+#include "ini.h"
+
 #include <algorithm>
 #include <fstream>
 #include <set>
@@ -25,18 +27,16 @@ std::vector<std::wstring> SplitList(const std::wstring& value) {
   return parts;
 }
 
-std::wstring ReadString(const std::wstring& path, const wchar_t* section, const wchar_t* key, const wchar_t* def = L"") {
-  wchar_t buffer[4096];
-  GetPrivateProfileStringW(section, key, def, buffer, static_cast<DWORD>(std::size(buffer)), path.c_str());
-  return buffer;
+std::wstring ReadString(const IniFile& ini, const wchar_t* section, const wchar_t* key, const wchar_t* def = L"") {
+  return ini.GetString(section, key, def);
 }
 
-int ReadInt(const std::wstring& path, const wchar_t* section, const wchar_t* key, int def) {
-  return GetPrivateProfileIntW(section, key, def, path.c_str());
+int ReadInt(const IniFile& ini, const wchar_t* section, const wchar_t* key, int def) {
+  return ini.GetInt(section, key, def);
 }
 
-bool ReadBool(const std::wstring& path, const wchar_t* section, const wchar_t* key, bool def) {
-  return ReadInt(path, section, key, def ? 1 : 0) != 0;
+bool ReadBool(const IniFile& ini, const wchar_t* section, const wchar_t* key, bool def) {
+  return ini.GetBool(section, key, def);
 }
 
 std::wstring GetFileStem(const std::wstring& name) {
@@ -69,6 +69,24 @@ NoteGroupType ParseGroupType(const std::wstring& value, NoteGroupType fallback) 
   if (value == L"dir" || value == L"directory") return NoteGroupType::Directory;
   if (value == L"text") return NoteGroupType::TextLines;
   return fallback;
+}
+
+bool ParseGroupSection(const std::wstring& section, std::wstring& id, NoteGroupType& type) {
+  if (section.rfind(L"dirgroup.", 0) == 0) {
+    id = section.substr(9);
+    type = NoteGroupType::Directory;
+    return true;
+  }
+  if (section.rfind(L"textgroup.", 0) == 0) {
+    id = section.substr(10);
+    type = NoteGroupType::TextLines;
+    return true;
+  }
+  if (section.rfind(L"note_group.", 0) == 0) {
+    id = section.substr(11);
+    return true;
+  }
+  return false;
 }
 
 NoteSortBy NormalizeSortByForGroupType(NoteGroupType type, NoteSortBy value, NoteSortBy fallback) {
@@ -486,49 +504,54 @@ bool LoadNotesConfig(const std::wstring& path, NotesConfig& config) {
     return false;
   }
 
-  config = NotesConfig{};
-  config.defaultGroupExpanded = ReadBool(path, L"notes_default", L"defaultGroupExpanded", true);
+  IniFile ini;
+  if (!ini.LoadUtf8(path)) {
+    return false;
+  }
 
-  config.sharedDefaults.filePatterns = SplitList(ReadString(path, L"notes_default", L"filePatterns", L"*.txt;*.md"));
+  config = NotesConfig{};
+  config.defaultGroupExpanded = ReadBool(ini, L"notes_default", L"defaultGroupExpanded", true);
+
+  config.sharedDefaults.filePatterns = SplitList(ReadString(ini, L"notes_default", L"filePatterns", L"*.txt;*.md"));
   if (config.sharedDefaults.filePatterns.empty()) {
     config.sharedDefaults.filePatterns = {L"*.txt", L"*.md"};
   }
-  config.sharedDefaults.createExtension = NormalizeExtension(ReadString(path, L"notes_default", L"createExtension"));
-  config.sharedDefaults.maxItems = NormalizeMaxItems(ReadInt(path, L"notes_default", L"maxItems", 5), 5);
+  config.sharedDefaults.createExtension = NormalizeExtension(ReadString(ini, L"notes_default", L"createExtension"));
+  config.sharedDefaults.maxItems = NormalizeMaxItems(ReadInt(ini, L"notes_default", L"maxItems", 5), 5);
   config.sharedDefaults.showExtensions = false;
-  config.sharedDefaults.defaultFileAction = ReadString(path, L"notes_default", L"defaultFileAction");
-  config.sharedDefaults.deleteCommand = ReadString(path, L"notes_default", L"deleteCommand");
-  config.sharedDefaults.fileActions = SplitList(ReadString(path, L"notes_default", L"fileActions"));
-  config.sharedDefaults.groupActions = SplitList(ReadString(path, L"notes_default", L"groupActions"));
+  config.sharedDefaults.defaultFileAction = ReadString(ini, L"notes_default", L"defaultFileAction");
+  config.sharedDefaults.deleteCommand = ReadString(ini, L"notes_default", L"deleteCommand");
+  config.sharedDefaults.fileActions = SplitList(ReadString(ini, L"notes_default", L"fileActions"));
+  config.sharedDefaults.groupActions = SplitList(ReadString(ini, L"notes_default", L"groupActions"));
 
   config.dirDefaults = config.sharedDefaults;
   config.dirDefaults.sortBy = NormalizeSortByForGroupType(NoteGroupType::Directory,
-    ParseSortBy(ReadString(path, L"notes_default", L"sortBy", L"mtime"), NoteSortBy::ModifiedTime),
+    ParseSortBy(ReadString(ini, L"notes_default", L"sortBy", L"mtime"), NoteSortBy::ModifiedTime),
     NoteSortBy::ModifiedTime);
-  config.dirDefaults.sortOrder = ParseSortOrder(ReadString(path, L"notes_default", L"sortOrder", L"desc"), SortOrder::Desc);
-  config.dirDefaults.filePatterns = SplitList(ReadString(path, L"notes_dir_default", L"filePatterns"));
+  config.dirDefaults.sortOrder = ParseSortOrder(ReadString(ini, L"notes_default", L"sortOrder", L"desc"), SortOrder::Desc);
+  config.dirDefaults.filePatterns = SplitList(ReadString(ini, L"notes_dir_default", L"filePatterns"));
   if (config.dirDefaults.filePatterns.empty()) {
     config.dirDefaults.filePatterns = config.sharedDefaults.filePatterns;
   }
-  config.dirDefaults.createExtension = NormalizeExtension(ReadString(path, L"notes_dir_default", L"createExtension",
+  config.dirDefaults.createExtension = NormalizeExtension(ReadString(ini, L"notes_dir_default", L"createExtension",
     config.dirDefaults.createExtension.c_str()));
   config.dirDefaults.maxItems = NormalizeMaxItems(
-    ReadInt(path, L"notes_dir_default", L"maxItems", config.dirDefaults.maxItems), config.dirDefaults.maxItems);
+    ReadInt(ini, L"notes_dir_default", L"maxItems", config.dirDefaults.maxItems), config.dirDefaults.maxItems);
   config.dirDefaults.sortBy = NormalizeSortByForGroupType(NoteGroupType::Directory,
-    ParseSortBy(ReadString(path, L"notes_dir_default", L"sortBy"), config.dirDefaults.sortBy),
+    ParseSortBy(ReadString(ini, L"notes_dir_default", L"sortBy"), config.dirDefaults.sortBy),
     config.dirDefaults.sortBy);
-  config.dirDefaults.sortOrder = ParseSortOrder(ReadString(path, L"notes_dir_default", L"sortOrder"), config.dirDefaults.sortOrder);
-  config.dirDefaults.showExtensions = ReadBool(path, L"notes_dir_default", L"showExtensions", config.dirDefaults.showExtensions);
-  config.dirDefaults.defaultFileAction = ReadString(path, L"notes_dir_default", L"defaultFileAction",
+  config.dirDefaults.sortOrder = ParseSortOrder(ReadString(ini, L"notes_dir_default", L"sortOrder"), config.dirDefaults.sortOrder);
+  config.dirDefaults.showExtensions = ReadBool(ini, L"notes_dir_default", L"showExtensions", config.dirDefaults.showExtensions);
+  config.dirDefaults.defaultFileAction = ReadString(ini, L"notes_dir_default", L"defaultFileAction",
     config.dirDefaults.defaultFileAction.c_str());
-  config.dirDefaults.deleteCommand = ReadString(path, L"notes_dir_default", L"deleteCommand",
+  config.dirDefaults.deleteCommand = ReadString(ini, L"notes_dir_default", L"deleteCommand",
     config.dirDefaults.deleteCommand.c_str());
   {
-    std::vector<std::wstring> actions = SplitList(ReadString(path, L"notes_dir_default", L"fileActions"));
+    std::vector<std::wstring> actions = SplitList(ReadString(ini, L"notes_dir_default", L"fileActions"));
     if (!actions.empty()) config.dirDefaults.fileActions = std::move(actions);
   }
   {
-    std::vector<std::wstring> actions = SplitList(ReadString(path, L"notes_dir_default", L"groupActions"));
+    std::vector<std::wstring> actions = SplitList(ReadString(ini, L"notes_dir_default", L"groupActions"));
     if (!actions.empty()) config.dirDefaults.groupActions = std::move(actions);
   }
 
@@ -536,33 +559,28 @@ bool LoadNotesConfig(const std::wstring& path, NotesConfig& config) {
   config.textDefaults.sortBy = NoteSortBy::LineOrder;
   config.textDefaults.sortOrder = SortOrder::Asc;
   config.textDefaults.filePatterns.clear();
-  config.textDefaults.createExtension = NormalizeExtension(ReadString(path, L"notes_text_default", L"createExtension",
+  config.textDefaults.createExtension = NormalizeExtension(ReadString(ini, L"notes_text_default", L"createExtension",
     config.textDefaults.createExtension.c_str()));
   config.textDefaults.maxItems = NormalizeMaxItems(
-    ReadInt(path, L"notes_text_default", L"maxItems", config.textDefaults.maxItems), config.textDefaults.maxItems);
-  config.textDefaults.sortBy = ParseSortBy(ReadString(path, L"notes_text_default", L"sortBy"), config.textDefaults.sortBy);
-  config.textDefaults.sortOrder = ParseSortOrder(ReadString(path, L"notes_text_default", L"sortOrder"), config.textDefaults.sortOrder);
+    ReadInt(ini, L"notes_text_default", L"maxItems", config.textDefaults.maxItems), config.textDefaults.maxItems);
+  config.textDefaults.sortBy = ParseSortBy(ReadString(ini, L"notes_text_default", L"sortBy"), config.textDefaults.sortBy);
+  config.textDefaults.sortOrder = ParseSortOrder(ReadString(ini, L"notes_text_default", L"sortOrder"), config.textDefaults.sortOrder);
   config.textDefaults.showExtensions = false;
-  config.textDefaults.defaultFileAction = ReadString(path, L"notes_text_default", L"defaultFileAction",
+  config.textDefaults.defaultFileAction = ReadString(ini, L"notes_text_default", L"defaultFileAction",
     config.textDefaults.defaultFileAction.c_str());
-  config.textDefaults.deleteCommand = ReadString(path, L"notes_text_default", L"deleteCommand",
+  config.textDefaults.deleteCommand = ReadString(ini, L"notes_text_default", L"deleteCommand",
     config.textDefaults.deleteCommand.c_str());
   {
-    std::vector<std::wstring> actions = SplitList(ReadString(path, L"notes_text_default", L"fileActions"));
+    std::vector<std::wstring> actions = SplitList(ReadString(ini, L"notes_text_default", L"fileActions"));
     if (!actions.empty()) config.textDefaults.fileActions = std::move(actions);
   }
   {
-    std::vector<std::wstring> actions = SplitList(ReadString(path, L"notes_text_default", L"groupActions"));
+    std::vector<std::wstring> actions = SplitList(ReadString(ini, L"notes_text_default", L"groupActions"));
     if (!actions.empty()) config.textDefaults.groupActions = std::move(actions);
   }
 
-  std::vector<wchar_t> sections(65536);
-  DWORD len = GetPrivateProfileSectionNamesW(sections.data(), static_cast<DWORD>(sections.size()), path.c_str());
-  if (len == 0) return true;
-
-  const wchar_t* ptr = sections.data();
-  while (*ptr) {
-    std::wstring section = ptr;
+  std::vector<std::wstring> sections = ini.GetSectionNames();
+  for (const std::wstring& section : sections) {
     if (section.rfind(L"file_action.", 0) == 0 || section.rfind(L"dir_action.", 0) == 0) {
       ActionConfig action{};
       if (section.rfind(L"file_action.", 0) == 0) {
@@ -572,18 +590,22 @@ bool LoadNotesConfig(const std::wstring& path, NotesConfig& config) {
         action.id = section.substr(11);
         action.target = ActionTarget::Directory;
       }
-      action.title = ReadString(path, section.c_str(), L"title");
+      action.title = ReadString(ini, section.c_str(), L"title");
       if (action.title.empty()) action.title = action.id;
-      action.command = ReadString(path, section.c_str(), L"command");
+      action.command = ReadString(ini, section.c_str(), L"command");
       if (!action.id.empty() && !action.title.empty() && !action.command.empty()) {
         config.actions[action.id] = action;
       }
-    } else if (section.rfind(L"note_group.", 0) == 0) {
+    } else {
       NoteGroupConfig group{};
-      group.id = section.substr(11);
-      group.title = ReadString(path, section.c_str(), L"title");
-      group.path = ReadString(path, section.c_str(), L"path");
-      group.type = ParseGroupType(ReadString(path, section.c_str(), L"type", L"dir"), NoteGroupType::Directory);
+      if (!ParseGroupSection(section, group.id, group.type)) {
+        continue;
+      }
+      group.title = ReadString(ini, section.c_str(), L"title");
+      group.path = ReadString(ini, section.c_str(), L"path");
+      if (section.rfind(L"note_group.", 0) == 0) {
+        group.type = ParseGroupType(ReadString(ini, section.c_str(), L"type", L"dir"), group.type);
+      }
       if (group.title.empty()) {
         if (group.type == NoteGroupType::TextLines && !group.path.empty()) {
           group.title = ExtractTextGroupTitle(group.path);
@@ -593,27 +615,26 @@ bool LoadNotesConfig(const std::wstring& path, NotesConfig& config) {
       if (!group.id.empty() && !group.title.empty() && !group.path.empty()) {
         const NoteGroupDefaults& defaults =
           group.type == NoteGroupType::Directory ? config.dirDefaults : config.textDefaults;
-        group.expanded = ReadBool(path, section.c_str(), L"expanded", config.defaultGroupExpanded);
+        group.expanded = ReadBool(ini, section.c_str(), L"expanded", config.defaultGroupExpanded);
         group.showExtensions = group.type == NoteGroupType::Directory
-          ? ReadBool(path, section.c_str(), L"showExtensions", defaults.showExtensions)
+          ? ReadBool(ini, section.c_str(), L"showExtensions", defaults.showExtensions)
           : false;
-        group.filePatterns = SplitList(ReadString(path, section.c_str(), L"filePatterns"));
+        group.filePatterns = SplitList(ReadString(ini, section.c_str(), L"filePatterns"));
         if (group.filePatterns.empty()) group.filePatterns = defaults.filePatterns;
-        group.createExtension = NormalizeExtension(ReadString(path, section.c_str(), L"createExtension", defaults.createExtension.c_str()));
-        group.maxItems = NormalizeMaxItems(ReadInt(path, section.c_str(), L"maxItems", defaults.maxItems), defaults.maxItems);
-        std::wstring rawSortBy = ReadString(path, section.c_str(), L"sortBy");
+        group.createExtension = NormalizeExtension(ReadString(ini, section.c_str(), L"createExtension", defaults.createExtension.c_str()));
+        group.maxItems = NormalizeMaxItems(ReadInt(ini, section.c_str(), L"maxItems", defaults.maxItems), defaults.maxItems);
+        std::wstring rawSortBy = ReadString(ini, section.c_str(), L"sortBy");
         group.sortBy = NormalizeSortByForGroupType(group.type, ParseSortBy(rawSortBy, defaults.sortBy), defaults.sortBy);
-        group.sortOrder = ParseSortOrder(ReadString(path, section.c_str(), L"sortOrder"), defaults.sortOrder);
-        group.defaultFileAction = ReadString(path, section.c_str(), L"defaultFileAction", defaults.defaultFileAction.c_str());
-        group.deleteCommand = ReadString(path, section.c_str(), L"deleteCommand", defaults.deleteCommand.c_str());
-        group.fileActions = SplitList(ReadString(path, section.c_str(), L"fileActions"));
+        group.sortOrder = ParseSortOrder(ReadString(ini, section.c_str(), L"sortOrder"), defaults.sortOrder);
+        group.defaultFileAction = ReadString(ini, section.c_str(), L"defaultFileAction", defaults.defaultFileAction.c_str());
+        group.deleteCommand = ReadString(ini, section.c_str(), L"deleteCommand", defaults.deleteCommand.c_str());
+        group.fileActions = SplitList(ReadString(ini, section.c_str(), L"fileActions"));
         if (group.fileActions.empty()) group.fileActions = defaults.fileActions;
-        group.groupActions = SplitList(ReadString(path, section.c_str(), L"groupActions"));
+        group.groupActions = SplitList(ReadString(ini, section.c_str(), L"groupActions"));
         if (group.groupActions.empty()) group.groupActions = defaults.groupActions;
         config.groups.push_back(group);
       }
     }
-    ptr += section.size() + 1;
   }
 
   return true;

@@ -13,6 +13,7 @@ cmake --build --preset vs-x64-release
 ## Configuration
 
 - `config.ini` is read from the program directory first, then `%AppData%\MyBuddy\`.
+- `config.ini` must be saved as UTF-8 without BOM.
 - `state.dat` is stored in `%AppData%\MyBuddy\`.
 - The AppData directory is always `%AppData%\MyBuddy\`.
 - `config.ini` is for stable settings.

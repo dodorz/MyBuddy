@@ -7,6 +7,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 add_executable(MyBuddy WIN32
   src/main.cpp
   src/app.cpp
+  src/ini.cpp
   src/MyBuddy.rc
   src/notes.cpp
   src/state.cpp
