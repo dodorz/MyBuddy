@@ -8,22 +8,22 @@
 #include <shellapi.h>
 
 namespace {
+std::wstring Trim(std::wstring value);
+
 std::vector<std::wstring> SplitList(const std::wstring& value) {
   std::vector<std::wstring> parts;
   std::wstring current;
   for (wchar_t ch : value) {
     if (ch == L';') {
-      if (!current.empty()) {
-        parts.push_back(current);
-        current.clear();
-      }
+      std::wstring token = Trim(current);
+      if (!token.empty()) parts.push_back(token);
+      current.clear();
       continue;
     }
     current.push_back(ch);
   }
-  if (!current.empty()) {
-    parts.push_back(current);
-  }
+  std::wstring token = Trim(current);
+  if (!token.empty()) parts.push_back(token);
   return parts;
 }
 
@@ -43,11 +43,68 @@ std::wstring ReadStringFallback(const IniFile& ini, const wchar_t* section,
   return ReadString(ini, section, key, fallback.c_str());
 }
 
-std::vector<std::wstring> ReadListFallback(const IniFile& ini, const wchar_t* section,
-  const wchar_t* key, const wchar_t* fallbackKey) {
-  std::vector<std::wstring> values = SplitList(ReadString(ini, section, key));
-  if (!values.empty()) return values;
-  return SplitList(ReadString(ini, section, fallbackKey));
+std::vector<std::wstring> ReadList(const IniFile& ini, const wchar_t* section, const wchar_t* key) {
+  return SplitList(ReadString(ini, section, key));
+}
+
+void AppendUniqueValues(std::vector<std::wstring>& target, const std::vector<std::wstring>& values) {
+  for (const std::wstring& value : values) {
+    if (std::find(target.begin(), target.end(), value) == target.end()) {
+      target.push_back(value);
+    }
+  }
+}
+
+void RemoveValues(std::vector<std::wstring>& target, const std::vector<std::wstring>& values) {
+  if (values.empty()) return;
+  target.erase(std::remove_if(target.begin(), target.end(),
+    [&](const std::wstring& current) {
+      return std::find(values.begin(), values.end(), current) != values.end();
+    }), target.end());
+}
+
+std::vector<std::wstring> ReadLayeredList(const IniFile& ini, const wchar_t* section,
+  const wchar_t* key, const wchar_t* fallbackKey, std::vector<std::wstring> current) {
+  const std::wstring normalizedKey = key;
+  const std::wstring normalizedFallbackKey = fallbackKey ? fallbackKey : L"";
+  const std::wstring addKey = normalizedKey + L"+";
+  const std::wstring removeKey = normalizedKey + L"-";
+  const std::wstring fallbackAddKey = normalizedFallbackKey.empty() ? L"" : normalizedFallbackKey + L"+";
+  const std::wstring fallbackRemoveKey = normalizedFallbackKey.empty() ? L"" : normalizedFallbackKey + L"-";
+
+  if (ini.HasKey(section, normalizedKey)) {
+    current = ReadList(ini, section, key);
+  } else if (!normalizedFallbackKey.empty() && ini.HasKey(section, normalizedFallbackKey)) {
+    current = ReadList(ini, section, fallbackKey);
+  }
+
+  AppendUniqueValues(current, SplitList(ReadString(ini, section, addKey.c_str())));
+  if (!fallbackAddKey.empty()) {
+    AppendUniqueValues(current, SplitList(ReadString(ini, section, fallbackAddKey.c_str())));
+  }
+
+  RemoveValues(current, SplitList(ReadString(ini, section, removeKey.c_str())));
+  if (!fallbackRemoveKey.empty()) {
+    RemoveValues(current, SplitList(ReadString(ini, section, fallbackRemoveKey.c_str())));
+  }
+
+  return current;
+}
+
+bool HasListDirective(const IniFile& ini, const wchar_t* section, const wchar_t* key, const wchar_t* fallbackKey = nullptr) {
+  const std::wstring normalizedKey = key;
+  const std::wstring normalizedFallbackKey = fallbackKey ? fallbackKey : L"";
+  if (ini.HasKey(section, normalizedKey) || ini.HasKey(section, (normalizedKey + L"+").c_str()) ||
+      ini.HasKey(section, (normalizedKey + L"-").c_str())) {
+    return true;
+  }
+  if (!normalizedFallbackKey.empty()) {
+    if (ini.HasKey(section, normalizedFallbackKey) || ini.HasKey(section, (normalizedFallbackKey + L"+").c_str()) ||
+        ini.HasKey(section, (normalizedFallbackKey + L"-").c_str())) {
+      return true;
+    }
+  }
+  return false;
 }
 
 int ReadInt(const IniFile& ini, const wchar_t* section, const wchar_t* key, int def) {
@@ -771,18 +828,15 @@ bool LoadNotesConfig(const std::wstring& path, NotesConfig& config) {
   }
   config.defaultGroupExpanded = ReadBool(ini, globalSection, L"defaultGroupExpanded", true);
 
-  config.sharedDefaults.filePatterns = SplitList(ReadString(ini, globalSection, L"filePatterns", L"*.txt;*.md"));
-  if (config.sharedDefaults.filePatterns.empty()) {
-    config.sharedDefaults.filePatterns = {L"*.txt", L"*.md"};
-  }
+  config.sharedDefaults.filePatterns = ReadLayeredList(ini, globalSection, L"filePatterns", nullptr, {L"*.txt", L"*.md"});
   config.sharedDefaults.createExtension = NormalizeExtension(ReadString(ini, globalSection, L"createExtension"));
   config.sharedDefaults.maxItems = NormalizeMaxItems(ReadInt(ini, globalSection, L"maxItems", 5), 5);
   config.sharedDefaults.showExtensions = false;
   config.sharedDefaults.defaultItemAction = ReadStringFallback(ini, globalSection, L"defaultItemAction", L"defaultFileAction");
   config.sharedDefaults.deleteTitle = ReadTitleOrName(ini, globalSection, L"deleteTitle", L"deleteName");
   config.sharedDefaults.deleteCommand = ReadString(ini, globalSection, L"deleteCommand");
-  config.sharedDefaults.itemActions = ReadListFallback(ini, globalSection, L"itemActions", L"fileActions");
-  config.sharedDefaults.groupActions = SplitList(ReadString(ini, globalSection, L"groupActions"));
+  config.sharedDefaults.itemActions = ReadLayeredList(ini, globalSection, L"itemActions", L"fileActions", {});
+  config.sharedDefaults.groupActions = ReadLayeredList(ini, globalSection, L"groupActions", nullptr, {});
 
   config.dirDefaults = config.sharedDefaults;
   config.dirDefaults.sortBy = NormalizeSortByForGroupType(NoteGroupType::Directory,
@@ -793,10 +847,7 @@ bool LoadNotesConfig(const std::wstring& path, NotesConfig& config) {
   if (!ini.HasSection(dirDefaultsSection) && ini.HasSection(L"notes_dir_default")) {
     dirDefaultsSection = L"notes_dir_default";
   }
-  config.dirDefaults.filePatterns = SplitList(ReadString(ini, dirDefaultsSection, L"filePatterns"));
-  if (config.dirDefaults.filePatterns.empty()) {
-    config.dirDefaults.filePatterns = config.sharedDefaults.filePatterns;
-  }
+  config.dirDefaults.filePatterns = ReadLayeredList(ini, dirDefaultsSection, L"filePatterns", nullptr, config.sharedDefaults.filePatterns);
   config.dirDefaults.createExtension = NormalizeExtension(ReadString(ini, dirDefaultsSection, L"createExtension",
     config.dirDefaults.createExtension.c_str()));
   config.dirDefaults.maxItems = NormalizeMaxItems(
@@ -813,12 +864,12 @@ bool LoadNotesConfig(const std::wstring& path, NotesConfig& config) {
   config.dirDefaults.deleteCommand = ReadString(ini, dirDefaultsSection, L"deleteCommand",
     config.dirDefaults.deleteCommand.c_str());
   {
-    std::vector<std::wstring> actions = ReadListFallback(ini, dirDefaultsSection, L"itemActions", L"fileActions");
-    if (!actions.empty()) config.dirDefaults.itemActions = std::move(actions);
+    config.dirDefaults.itemActions = ReadLayeredList(ini, dirDefaultsSection, L"itemActions", L"fileActions",
+      config.dirDefaults.itemActions);
   }
   {
-    std::vector<std::wstring> actions = SplitList(ReadString(ini, dirDefaultsSection, L"groupActions"));
-    if (!actions.empty()) config.dirDefaults.groupActions = std::move(actions);
+    config.dirDefaults.groupActions = ReadLayeredList(ini, dirDefaultsSection, L"groupActions", nullptr,
+      config.dirDefaults.groupActions);
   }
 
   config.textDefaults = config.sharedDefaults;
@@ -843,14 +894,14 @@ bool LoadNotesConfig(const std::wstring& path, NotesConfig& config) {
   config.textDefaults.deleteCommand = ReadString(ini, textDefaultsSection, L"deleteCommand",
     config.textDefaults.deleteCommand.c_str());
   {
-    std::vector<std::wstring> actions = ReadListFallback(ini, textDefaultsSection, L"itemActions", L"fileActions");
-    if (!actions.empty()) config.textDefaults.itemActions = std::move(actions);
+    config.textDefaults.itemActions = ReadLayeredList(ini, textDefaultsSection, L"itemActions", L"fileActions",
+      config.textDefaults.itemActions);
   }
   {
-    std::vector<std::wstring> actions = SplitList(ReadString(ini, textDefaultsSection, L"groupActions"));
-    if (!actions.empty()) config.textDefaults.groupActions = std::move(actions);
+    config.textDefaults.groupActions = ReadLayeredList(ini, textDefaultsSection, L"groupActions", nullptr,
+      config.textDefaults.groupActions);
   }
-  if (config.textDefaults.itemActions.empty()) {
+  if (!HasListDirective(ini, textDefaultsSection, L"itemActions", L"fileActions")) {
     config.textDefaults.itemActions = config.textDefaults.groupActions;
   }
 
@@ -870,15 +921,15 @@ bool LoadNotesConfig(const std::wstring& path, NotesConfig& config) {
     config.todoDefaults.deleteCommand = ReadString(ini, todoDefaultsSection, L"deleteCommand",
       config.todoDefaults.deleteCommand.c_str());
     {
-      std::vector<std::wstring> actions = ReadListFallback(ini, todoDefaultsSection, L"itemActions", L"fileActions");
-      if (!actions.empty()) config.todoDefaults.itemActions = std::move(actions);
+      config.todoDefaults.itemActions = ReadLayeredList(ini, todoDefaultsSection, L"itemActions", L"fileActions",
+        config.todoDefaults.itemActions);
     }
     {
-      std::vector<std::wstring> actions = SplitList(ReadString(ini, todoDefaultsSection, L"groupActions"));
-      if (!actions.empty()) config.todoDefaults.groupActions = std::move(actions);
+      config.todoDefaults.groupActions = ReadLayeredList(ini, todoDefaultsSection, L"groupActions", nullptr,
+        config.todoDefaults.groupActions);
     }
   }
-  if (config.todoDefaults.itemActions.empty()) {
+  if (!HasListDirective(ini, todoDefaultsSection, L"itemActions", L"fileActions")) {
     config.todoDefaults.itemActions = config.todoDefaults.groupActions;
   }
 
@@ -923,8 +974,7 @@ bool LoadNotesConfig(const std::wstring& path, NotesConfig& config) {
         group.showExtensions = group.type == NoteGroupType::Directory
           ? ReadBool(ini, section.c_str(), L"showExtensions", defaults.showExtensions)
           : false;
-        group.filePatterns = SplitList(ReadString(ini, section.c_str(), L"filePatterns"));
-        if (group.filePatterns.empty()) group.filePatterns = defaults.filePatterns;
+        group.filePatterns = ReadLayeredList(ini, section.c_str(), L"filePatterns", nullptr, defaults.filePatterns);
         group.createExtension = NormalizeExtension(ReadString(ini, section.c_str(), L"createExtension", defaults.createExtension.c_str()));
         group.maxItems = NormalizeMaxItems(ReadInt(ini, section.c_str(), L"maxItems", defaults.maxItems), defaults.maxItems);
         std::wstring rawSortBy = ReadString(ini, section.c_str(), L"sortBy");
@@ -935,18 +985,14 @@ bool LoadNotesConfig(const std::wstring& path, NotesConfig& config) {
         group.deleteTitle = ReadTitleOrName(ini, section.c_str(), L"deleteTitle", L"deleteName",
           defaults.deleteTitle.c_str());
         group.deleteCommand = ReadString(ini, section.c_str(), L"deleteCommand", defaults.deleteCommand.c_str());
-        group.groupActions = SplitList(ReadString(ini, section.c_str(), L"groupActions"));
-        if (group.groupActions.empty()) group.groupActions = defaults.groupActions;
-        std::vector<std::wstring> explicitItemActions =
-          ReadListFallback(ini, section.c_str(), L"itemActions", L"fileActions");
-        group.itemActions = explicitItemActions;
-        if (group.itemActions.empty() && !IsSingleFileLineGroupType(group.type)) {
-          group.itemActions = defaults.itemActions;
-        }
+        group.groupActions = ReadLayeredList(ini, section.c_str(), L"groupActions", nullptr, defaults.groupActions);
+        const bool hasOwnItemOverride = HasListDirective(ini, section.c_str(), L"itemActions", L"fileActions");
+        group.itemActions = ReadLayeredList(ini, section.c_str(), L"itemActions", L"fileActions",
+          !IsSingleFileLineGroupType(group.type) ? defaults.itemActions : std::vector<std::wstring>{});
         if (IsSingleFileLineGroupType(group.type)) {
-          if (group.itemActions.empty()) group.itemActions = group.groupActions;
-        } else if (group.itemActions.empty()) {
-          group.itemActions = defaults.itemActions;
+          if (!hasOwnItemOverride) {
+            group.itemActions = group.groupActions;
+          }
         }
         config.groups.push_back(group);
       }

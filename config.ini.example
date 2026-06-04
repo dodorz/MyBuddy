@@ -61,6 +61,9 @@ defaultGroupExpanded=1
 ; Default item context menu actions unless overridden.
 ; For dirgroup/textgroup/todogroup this must reference [file_action.*] sections.
 itemActions=Edit;Reveal
+; '=' replaces inherited values, '+=' appends, '-=' removes:
+; itemActions+=Markpad;SoloMD
+; itemActions-=Reveal
 ; Default group-header context menu actions unless overridden.
 ; For dirgroup this must reference [dir_action.*] sections.
 ; For textgroup/todogroup this must reference [file_action.*] sections.
@@ -70,6 +73,8 @@ groupActions=Terminal
 ; Default file patterns for dir groups, separated by ';'.
 ; Typical values: *.txt;*.md
 filePatterns=*.txt;*.md
+; filePatterns+=*.log
+; filePatterns-=*.txt
 ; Default extension used when creating a new note in dir groups.
 ; Examples: .txt, .md
 ; If empty, the first writable extension from filePatterns is used.
@@ -204,6 +209,8 @@ path=C:\Users\USERNAME\Documents\Notes\Inbox
 ; Group-header context menu actions, separated by ';'.
 ; Must reference [dir_action.*] sections.
 ; groupActions=Terminal
+; itemActions+=SoloMD
+; itemActions-=Reveal
 
 [textgroup.todo_lines]
 ; Path points to one text file for text groups.
@@ -216,6 +223,8 @@ deleteName=Delete
 ; deleteCommand=some-tool.exe "{file}"
 ; If omitted, groupActions is used.
 ; itemActions=Reveal
+; itemActions+=Markpad
+; groupActions-=Reveal
 groupActions=Reveal
 
 [todogroup.tasks]

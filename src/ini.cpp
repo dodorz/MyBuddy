@@ -147,6 +147,19 @@ bool IniFile::HasSection(const std::wstring& section) const {
   return false;
 }
 
+bool IniFile::HasKey(const std::wstring& section, const std::wstring& key) const {
+  const std::wstring normalizedSection = ToLower(section);
+  const std::wstring normalizedKey = ToLower(key);
+  for (const auto& entry : sections_) {
+    if (entry.normalizedName != normalizedSection) continue;
+    for (const auto& item : entry.items) {
+      if (item.first == normalizedKey) return true;
+    }
+    return false;
+  }
+  return false;
+}
+
 std::vector<std::wstring> IniFile::GetSectionNames() const {
   std::vector<std::wstring> names;
   names.reserve(sections_.size());
