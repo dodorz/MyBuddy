@@ -10,13 +10,13 @@
 namespace {
 std::wstring Trim(std::wstring value);
 
-std::vector<std::wstring> SplitList(const std::wstring& value) {
+std::vector<std::wstring> SplitList(const std::wstring& value, bool preserveEmptyItems = false) {
   std::vector<std::wstring> parts;
   std::wstring current;
   for (wchar_t ch : value) {
     if (ch == L';') {
       std::wstring token = Trim(current);
-      if (!token.empty()) parts.push_back(token);
+      if (preserveEmptyItems || !token.empty()) parts.push_back(token);
       current.clear();
       continue;
     }
@@ -43,12 +43,18 @@ std::wstring ReadStringFallback(const IniFile& ini, const wchar_t* section,
   return ReadString(ini, section, key, fallback.c_str());
 }
 
-std::vector<std::wstring> ReadList(const IniFile& ini, const wchar_t* section, const wchar_t* key) {
-  return SplitList(ReadString(ini, section, key));
+std::vector<std::wstring> ReadList(const IniFile& ini, const wchar_t* section, const wchar_t* key,
+  bool preserveEmptyItems = false) {
+  return SplitList(ReadString(ini, section, key), preserveEmptyItems);
 }
 
-void AppendUniqueValues(std::vector<std::wstring>& target, const std::vector<std::wstring>& values) {
+void AppendUniqueValues(std::vector<std::wstring>& target, const std::vector<std::wstring>& values,
+  bool preserveEmptyItems = false) {
   for (const std::wstring& value : values) {
+    if (preserveEmptyItems && value.empty()) {
+      target.push_back(value);
+      continue;
+    }
     if (std::find(target.begin(), target.end(), value) == target.end()) {
       target.push_back(value);
     }
@@ -64,7 +70,7 @@ void RemoveValues(std::vector<std::wstring>& target, const std::vector<std::wstr
 }
 
 std::vector<std::wstring> ReadLayeredList(const IniFile& ini, const wchar_t* section,
-  const wchar_t* key, const wchar_t* fallbackKey, std::vector<std::wstring> current) {
+  const wchar_t* key, const wchar_t* fallbackKey, std::vector<std::wstring> current, bool preserveEmptyItems = false) {
   const std::wstring normalizedKey = key;
   const std::wstring normalizedFallbackKey = fallbackKey ? fallbackKey : L"";
   const std::wstring addKey = normalizedKey + L"+";
@@ -73,19 +79,19 @@ std::vector<std::wstring> ReadLayeredList(const IniFile& ini, const wchar_t* sec
   const std::wstring fallbackRemoveKey = normalizedFallbackKey.empty() ? L"" : normalizedFallbackKey + L"-";
 
   if (ini.HasKey(section, normalizedKey)) {
-    current = ReadList(ini, section, key);
+    current = ReadList(ini, section, key, preserveEmptyItems);
   } else if (!normalizedFallbackKey.empty() && ini.HasKey(section, normalizedFallbackKey)) {
-    current = ReadList(ini, section, fallbackKey);
+    current = ReadList(ini, section, fallbackKey, preserveEmptyItems);
   }
 
-  AppendUniqueValues(current, SplitList(ReadString(ini, section, addKey.c_str())));
+  AppendUniqueValues(current, SplitList(ReadString(ini, section, addKey.c_str()), preserveEmptyItems), preserveEmptyItems);
   if (!fallbackAddKey.empty()) {
-    AppendUniqueValues(current, SplitList(ReadString(ini, section, fallbackAddKey.c_str())));
+    AppendUniqueValues(current, SplitList(ReadString(ini, section, fallbackAddKey.c_str()), preserveEmptyItems), preserveEmptyItems);
   }
 
-  RemoveValues(current, SplitList(ReadString(ini, section, removeKey.c_str())));
+  RemoveValues(current, SplitList(ReadString(ini, section, removeKey.c_str()), preserveEmptyItems));
   if (!fallbackRemoveKey.empty()) {
-    RemoveValues(current, SplitList(ReadString(ini, section, fallbackRemoveKey.c_str())));
+    RemoveValues(current, SplitList(ReadString(ini, section, fallbackRemoveKey.c_str()), preserveEmptyItems));
   }
 
   return current;
@@ -835,8 +841,8 @@ bool LoadNotesConfig(const std::wstring& path, NotesConfig& config) {
   config.sharedDefaults.defaultItemAction = ReadStringFallback(ini, globalSection, L"defaultItemAction", L"defaultFileAction");
   config.sharedDefaults.deleteTitle = ReadTitleOrName(ini, globalSection, L"deleteTitle", L"deleteName");
   config.sharedDefaults.deleteCommand = ReadString(ini, globalSection, L"deleteCommand");
-  config.sharedDefaults.itemActions = ReadLayeredList(ini, globalSection, L"itemActions", L"fileActions", {});
-  config.sharedDefaults.groupActions = ReadLayeredList(ini, globalSection, L"groupActions", nullptr, {});
+  config.sharedDefaults.itemActions = ReadLayeredList(ini, globalSection, L"itemActions", L"fileActions", {}, true);
+  config.sharedDefaults.groupActions = ReadLayeredList(ini, globalSection, L"groupActions", nullptr, {}, true);
 
   config.dirDefaults = config.sharedDefaults;
   config.dirDefaults.sortBy = NormalizeSortByForGroupType(NoteGroupType::Directory,
@@ -865,11 +871,11 @@ bool LoadNotesConfig(const std::wstring& path, NotesConfig& config) {
     config.dirDefaults.deleteCommand.c_str());
   {
     config.dirDefaults.itemActions = ReadLayeredList(ini, dirDefaultsSection, L"itemActions", L"fileActions",
-      config.dirDefaults.itemActions);
+      config.dirDefaults.itemActions, true);
   }
   {
     config.dirDefaults.groupActions = ReadLayeredList(ini, dirDefaultsSection, L"groupActions", nullptr,
-      config.dirDefaults.groupActions);
+      config.dirDefaults.groupActions, true);
   }
 
   config.textDefaults = config.sharedDefaults;
@@ -895,11 +901,11 @@ bool LoadNotesConfig(const std::wstring& path, NotesConfig& config) {
     config.textDefaults.deleteCommand.c_str());
   {
     config.textDefaults.itemActions = ReadLayeredList(ini, textDefaultsSection, L"itemActions", L"fileActions",
-      config.textDefaults.itemActions);
+      config.textDefaults.itemActions, true);
   }
   {
     config.textDefaults.groupActions = ReadLayeredList(ini, textDefaultsSection, L"groupActions", nullptr,
-      config.textDefaults.groupActions);
+      config.textDefaults.groupActions, true);
   }
   if (!HasListDirective(ini, textDefaultsSection, L"itemActions", L"fileActions")) {
     config.textDefaults.itemActions = config.textDefaults.groupActions;
@@ -922,11 +928,11 @@ bool LoadNotesConfig(const std::wstring& path, NotesConfig& config) {
       config.todoDefaults.deleteCommand.c_str());
     {
       config.todoDefaults.itemActions = ReadLayeredList(ini, todoDefaultsSection, L"itemActions", L"fileActions",
-        config.todoDefaults.itemActions);
+        config.todoDefaults.itemActions, true);
     }
     {
       config.todoDefaults.groupActions = ReadLayeredList(ini, todoDefaultsSection, L"groupActions", nullptr,
-        config.todoDefaults.groupActions);
+        config.todoDefaults.groupActions, true);
     }
   }
   if (!HasListDirective(ini, todoDefaultsSection, L"itemActions", L"fileActions")) {
@@ -985,10 +991,10 @@ bool LoadNotesConfig(const std::wstring& path, NotesConfig& config) {
         group.deleteTitle = ReadTitleOrName(ini, section.c_str(), L"deleteTitle", L"deleteName",
           defaults.deleteTitle.c_str());
         group.deleteCommand = ReadString(ini, section.c_str(), L"deleteCommand", defaults.deleteCommand.c_str());
-        group.groupActions = ReadLayeredList(ini, section.c_str(), L"groupActions", nullptr, defaults.groupActions);
+        group.groupActions = ReadLayeredList(ini, section.c_str(), L"groupActions", nullptr, defaults.groupActions, true);
         const bool hasOwnItemOverride = HasListDirective(ini, section.c_str(), L"itemActions", L"fileActions");
         group.itemActions = ReadLayeredList(ini, section.c_str(), L"itemActions", L"fileActions",
-          !IsSingleFileLineGroupType(group.type) ? defaults.itemActions : std::vector<std::wstring>{});
+          !IsSingleFileLineGroupType(group.type) ? defaults.itemActions : std::vector<std::wstring>{}, true);
         if (IsSingleFileLineGroupType(group.type)) {
           if (!hasOwnItemOverride) {
             group.itemActions = group.groupActions;

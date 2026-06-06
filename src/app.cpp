@@ -178,12 +178,75 @@ std::wstring GetFileStemFromName(const std::wstring& name) {
   return pos == std::wstring::npos ? name : name.substr(0, pos);
 }
 
+struct ConfiguredMenuEntry {
+  bool separator = false;
+  std::wstring actionId;
+};
+
+std::vector<ConfiguredMenuEntry> BuildConfiguredMenuEntries(
+  const std::vector<std::wstring>& configuredActionIds,
+  const std::map<std::wstring, ActionConfig>& actions,
+  const NoteFile* file,
+  bool initialHasEntries = false,
+  const std::wstring* skipActionId = nullptr) {
+  std::vector<ConfiguredMenuEntry> entries;
+  bool hasEntries = initialHasEntries;
+  bool lastWasSeparator = !initialHasEntries;
+
+  for (const std::wstring& actionId : configuredActionIds) {
+    if (skipActionId && actionId == *skipActionId) continue;
+
+    if (actionId.empty()) {
+      if (hasEntries && !lastWasSeparator) {
+        entries.push_back({true, L""});
+        lastWasSeparator = true;
+      }
+      continue;
+    }
+
+    auto it = actions.find(actionId);
+    if (it == actions.end()) continue;
+    if (!IsActionTargetCompatible(it->second, file)) continue;
+
+    entries.push_back({false, actionId});
+    hasEntries = true;
+    lastWasSeparator = false;
+  }
+
+  while (!entries.empty() && entries.back().separator) {
+    entries.pop_back();
+  }
+  return entries;
+}
+
+void AppendConfiguredMenuEntries(HMENU menu,
+  const std::vector<ConfiguredMenuEntry>& entries,
+  const std::map<std::wstring, ActionConfig>& actions,
+  UINT& nextActionId,
+  std::unordered_map<UINT, std::wstring>& actionIds) {
+  for (const ConfiguredMenuEntry& entry : entries) {
+    if (entry.separator) {
+      AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+      continue;
+    }
+
+    auto it = actions.find(entry.actionId);
+    if (it == actions.end()) continue;
+    AppendMenuW(menu, MF_STRING, nextActionId, it->second.title.c_str());
+    actionIds[nextActionId] = entry.actionId;
+    ++nextActionId;
+  }
+}
+
 bool IsSingleFileLineGroupType(NoteGroupType type) {
   return type == NoteGroupType::TextLines || type == NoteGroupType::TodoTxt;
 }
 
 std::wstring GetPrimaryGroupActionId(const NoteGroupConfig& group) {
-  return group.groupActions.empty() ? L"" : group.groupActions.front();
+  for (const std::wstring& actionId : group.groupActions) {
+    if (!actionId.empty()) return actionId;
+  }
+  return L"";
 }
 
 App::ToolbarScope ParseToolbarScope(const std::wstring& value) {
@@ -2783,17 +2846,11 @@ void App::RunGroupMenu(int groupIndex, POINT screenPt) {
     AppendMenuW(menu, MF_STRING, kMenuNew, L"New Note");
     AppendMenuW(menu, MF_STRING, kMenuNewFromClipboard, L"New From Clipboard");
     std::unordered_map<UINT, std::wstring> actionIds;
-    if (!group.groupActions.empty()) {
+    std::vector<ConfiguredMenuEntry> configuredEntries =
+      BuildConfiguredMenuEntries(group.groupActions, notesConfig_.actions, nullptr);
+    if (!configuredEntries.empty()) {
       AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-    }
-
-    for (const std::wstring& actionId : group.groupActions) {
-      auto it = notesConfig_.actions.find(actionId);
-      if (it == notesConfig_.actions.end()) continue;
-      if (!IsActionTargetCompatible(it->second, nullptr)) continue;
-      AppendMenuW(menu, MF_STRING, nextActionId, it->second.title.c_str());
-      actionIds[nextActionId] = actionId;
-      ++nextActionId;
+      AppendConfiguredMenuEntries(menu, configuredEntries, notesConfig_.actions, nextActionId, actionIds);
     }
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(menu, MF_STRING, kMenuRefresh, L"Refresh");
@@ -2824,14 +2881,9 @@ void App::RunGroupMenu(int groupIndex, POINT screenPt) {
   }
 
   std::unordered_map<UINT, std::wstring> actionIds;
-  for (const std::wstring& actionId : group.groupActions) {
-    auto it = notesConfig_.actions.find(actionId);
-    if (it == notesConfig_.actions.end()) continue;
-    if (!hasSourceFile || !IsActionTargetCompatible(it->second, &sourceFile)) continue;
-    AppendMenuW(menu, MF_STRING, nextActionId, it->second.title.c_str());
-    actionIds[nextActionId] = actionId;
-    ++nextActionId;
-  }
+  std::vector<ConfiguredMenuEntry> configuredEntries =
+    BuildConfiguredMenuEntries(group.groupActions, notesConfig_.actions, hasSourceFile ? &sourceFile : nullptr);
+  AppendConfiguredMenuEntries(menu, configuredEntries, notesConfig_.actions, nextActionId, actionIds);
   const bool canDeleteSource = hasSourceFile && !group.deleteTitle.empty();
   if (canDeleteSource) AppendMenuW(menu, MF_STRING, kMenuDelete, group.deleteTitle.c_str());
   if (!actionIds.empty() || canDeleteSource) AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
@@ -2886,15 +2938,9 @@ void App::RunFileMenu(int groupIndex, int fileIndex, POINT screenPt) {
     }
   }
 
-  for (const std::wstring& actionId : group.itemActions) {
-    if (actionId == group.defaultItemAction) continue;
-    auto it = notesConfig_.actions.find(actionId);
-    if (it == notesConfig_.actions.end()) continue;
-    if (!IsActionTargetCompatible(it->second, &file)) continue;
-    AppendMenuW(menu, MF_STRING, nextActionId, it->second.title.c_str());
-    actionIds[nextActionId] = actionId;
-    ++nextActionId;
-  }
+  std::vector<ConfiguredMenuEntry> configuredEntries =
+    BuildConfiguredMenuEntries(group.itemActions, notesConfig_.actions, &file, !actionIds.empty(), &group.defaultItemAction);
+  AppendConfiguredMenuEntries(menu, configuredEntries, notesConfig_.actions, nextActionId, actionIds);
   if (canDelete) AppendMenuW(menu, MF_STRING, kMenuDelete, group.deleteTitle.c_str());
   if (!actionIds.empty() || canDelete) AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
   AppendMenuW(menu, MF_STRING, kMenuRefresh, L"Refresh");

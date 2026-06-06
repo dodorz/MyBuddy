@@ -60,6 +60,7 @@ defaultGroupExpanded=1
 ; deleteCommand=some-tool.exe "{file}"
 ; Default item context menu actions unless overridden.
 ; For dirgroup/textgroup/todogroup this must reference [file_action.*] sections.
+; Use ';;' to insert a separator line in the menu.
 itemActions=Edit;Reveal
 ; '=' replaces inherited values, '+=' appends, '-=' removes:
 ; itemActions+=Markpad;SoloMD
@@ -67,6 +68,7 @@ itemActions=Edit;Reveal
 ; Default group-header context menu actions unless overridden.
 ; For dirgroup this must reference [dir_action.*] sections.
 ; For textgroup/todogroup this must reference [file_action.*] sections.
+; Use ';;' to insert a separator line in the menu.
 groupActions=Terminal
 
 [dirgroup]
