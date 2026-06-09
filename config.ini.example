@@ -46,7 +46,7 @@ maxItems=5
 ; Allowed values: 0, 1
 defaultGroupExpanded=1
 ; Default item action unless overridden.
-; For dirgroup/textgroup/todogroup this must reference [file_action.*].
+; For dirgroup/textgroup/todogroup this must reference [action.*].
 ; defaultItemAction=Edit
 ; Optional name for the delete menu item.
 ; If empty, no delete item is shown.
@@ -59,15 +59,14 @@ defaultGroupExpanded=1
 ; {file} {dir} {name} {stem} {group} {group_title} {group_dir}
 ; deleteCommand=some-tool.exe "{file}"
 ; Default item context menu actions unless overridden.
-; For dirgroup/textgroup/todogroup this must reference [file_action.*] sections.
+; For dirgroup/textgroup/todogroup this must reference [action.*] sections.
 ; Use ';;' to insert a separator line in the menu.
 itemActions=Edit;Reveal
 ; '=' replaces inherited values, '+=' appends, '-=' removes:
 ; itemActions+=Markpad;SoloMD
 ; itemActions-=Reveal
 ; Default group-header context menu actions unless overridden.
-; For dirgroup this must reference [dir_action.*] sections.
-; For textgroup/todogroup this must reference [file_action.*] sections.
+; Must reference [action.*] sections.
 ; Use ';;' to insert a separator line in the menu.
 groupActions=Terminal
 
@@ -91,7 +90,7 @@ sortOrder=desc
 ; Allowed values: 0, 1. Default: 0
 showExtensions=0
 ; Default dirgroup item action.
-; Must reference [file_action.*].
+; Must reference [action.*].
 ; defaultItemAction=Edit
 ; Optional default name for the delete menu item in dir groups.
 ; deleteName=Delete
@@ -101,10 +100,10 @@ showExtensions=0
 ; If omitted and deleteName/deleteTitle is set, deletion moves the file to Recycle Bin.
 ; deleteCommand=some-tool.exe "{file}"
 ; Default dirgroup item context actions.
-; Must reference [file_action.*] sections.
+; Must reference [action.*] sections.
 itemActions=Edit;Reveal
 ; Default dirgroup group-header context actions.
-; Must reference [dir_action.*] sections.
+; Must reference [action.*] sections.
 groupActions=Terminal
 
 [textgroup]
@@ -126,10 +125,10 @@ sortOrder=asc
 ; deleteCommand=some-tool.exe "{file}"
 ; Default textgroup item context actions.
 ; If omitted, groupActions is used.
-; Must reference [file_action.*] sections.
+; Must reference [action.*] sections.
 itemActions=Reveal
 ; Default textgroup group-header context actions.
-; Must reference [file_action.*] sections.
+; Must reference [action.*] sections.
 groupActions=Reveal
 
 [todogroup]
@@ -150,23 +149,27 @@ sortOrder=asc
 ; If omitted, groupActions is used.
 itemActions=Reveal
 ; Default todogroup group-header context actions.
-; Must reference [file_action.*] sections.
+; Must reference [action.*] sections.
 groupActions=Reveal
 
-[file_action.Edit]
+[action.Edit]
 ; Menu text shown to the user.
 title=Edit
+; Allowed target values: file, dir, both
+target=file
 ; Full command line.
 ; Available placeholders:
 ; {file} {dir} {name} {stem} {group} {group_title} {group_dir}
 command=notepad.exe "{file}"
 
-[file_action.Reveal]
+[action.Reveal]
 title=Open Folder
+target=file
 command=explorer.exe /select,"{file}"
 
-[dir_action.Terminal]
+[action.Terminal]
 ; If omitted, the action id "Terminal" is used as the title.
+target=dir
 command=wt.exe -d "{group_dir}"
 
 [dirgroup.inbox]
@@ -195,7 +198,7 @@ path=C:\Users\USERNAME\Documents\Notes\Inbox
 ; Allowed values: asc, desc
 ; sortOrder=desc
 ; Action id used when clicking a file item or after creating a new file.
-; Must reference a [file_action.*] section.
+; Must reference an [action.*] section.
 ; defaultItemAction=Edit
 ; Optional per-group override for the delete menu item name.
 ; If empty, no delete item is shown for this group's file items.
@@ -206,10 +209,10 @@ path=C:\Users\USERNAME\Documents\Notes\Inbox
 ; If omitted and deleteName/deleteTitle is set, deletion moves the target file to Recycle Bin.
 ; deleteCommand=some-tool.exe "{file}"
 ; Additional item context menu actions, separated by ';'.
-; Must reference [file_action.*] sections.
+; Must reference [action.*] sections.
 ; itemActions=Edit;Reveal
 ; Group-header context menu actions, separated by ';'.
-; Must reference [dir_action.*] sections.
+; Must reference [action.*] sections.
 ; groupActions=Terminal
 ; itemActions+=SoloMD
 ; itemActions-=Reveal

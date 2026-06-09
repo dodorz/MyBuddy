@@ -143,6 +143,7 @@ SortOrder ParseSortOrder(const std::wstring& value, SortOrder fallback) {
 
 ActionTarget ParseActionTarget(const std::wstring& value, ActionTarget fallback) {
   if (value == L"file") return ActionTarget::File;
+  if (value == L"both" || value == L"any") return ActionTarget::Both;
   if (value == L"dir" || value == L"directory" || value == L"group") return ActionTarget::Directory;
   return fallback;
 }
@@ -572,8 +573,24 @@ bool TryFindTomlFrontMatter(const std::vector<std::wstring>& lines, size_t& cont
   return false;
 }
 
-std::wstring TryParseTomlTitle(const std::vector<std::wstring>& lines, size_t& contentStartLine) {
-  if (!TryFindTomlFrontMatter(lines, contentStartLine)) return L"";
+struct MarkdownFrontMatter {
+  std::wstring title;
+  std::wstring author;
+};
+
+std::wstring ParseFrontMatterValue(std::wstring value) {
+  value = Trim(value);
+  if (value.size() >= 2 &&
+      ((value.front() == L'"' && value.back() == L'"') ||
+       (value.front() == L'\'' && value.back() == L'\''))) {
+    value = value.substr(1, value.size() - 2);
+  }
+  return Trim(value);
+}
+
+MarkdownFrontMatter ParseMarkdownFrontMatter(const std::vector<std::wstring>& lines, size_t& contentStartLine) {
+  MarkdownFrontMatter metadata{};
+  if (!TryFindTomlFrontMatter(lines, contentStartLine)) return metadata;
   const std::wstring delimiter = Trim(lines[0]);
   for (size_t i = 1; i < lines.size(); ++i) {
     std::wstring line = Trim(lines[i]);
@@ -591,16 +608,26 @@ std::wstring TryParseTomlTitle(const std::vector<std::wstring>& lines, size_t& c
       valueStart = separator + 1;
     }
     std::wstring key = Trim(line.substr(0, separator));
-    if (ToLower(key) != L"title") continue;
-    std::wstring value = Trim(line.substr(valueStart));
-    if (value.size() >= 2 &&
-        ((value.front() == L'"' && value.back() == L'"') ||
-         (value.front() == L'\'' && value.back() == L'\''))) {
-      value = value.substr(1, value.size() - 2);
+    std::wstring value = ParseFrontMatterValue(line.substr(valueStart));
+    std::wstring normalizedKey = ToLower(key);
+    if (normalizedKey == L"title") {
+      metadata.title = value;
+    } else if (normalizedKey == L"author") {
+      metadata.author = value;
     }
-    return Trim(value);
   }
-  return L"";
+  return metadata;
+}
+
+std::wstring TryParseTomlTitle(const std::vector<std::wstring>& lines, size_t& contentStartLine) {
+  return ParseMarkdownFrontMatter(lines, contentStartLine).title;
+}
+
+std::wstring AppendMarkdownAuthor(std::wstring title, const std::wstring& author) {
+  title = Trim(title);
+  const std::wstring cleanAuthor = Trim(author);
+  if (title.empty() || cleanAuthor.empty()) return title;
+  return title + L" - " + cleanAuthor;
 }
 
 std::wstring ExtractNoteBaseName(const std::wstring& path) {
@@ -625,6 +652,34 @@ std::wstring ExtractNoteBaseName(const std::wstring& path) {
   return SanitizeFileBaseName(candidate);
 }
 
+std::wstring ExtractMarkdownTitleByContent(const std::wstring& path, const std::wstring& fallback) {
+  std::vector<std::wstring> lines = SplitLines(ReadTextFilePrefix(path, 64 * 1024));
+  size_t contentStart = 0;
+  MarkdownFrontMatter metadata = ParseMarkdownFrontMatter(lines, contentStart);
+  if (!metadata.title.empty()) return AppendMarkdownAuthor(metadata.title, metadata.author);
+
+  size_t firstContentLine = contentStart;
+  while (firstContentLine < lines.size() && Trim(lines[firstContentLine]).empty()) ++firstContentLine;
+
+  for (size_t i = contentStart; i < lines.size(); ++i) {
+    std::wstring line = Trim(lines[i]);
+    if (line.rfind(L"# ", 0) == 0) {
+      std::wstring title = StripMdHeading(line);
+      if (!title.empty()) return AppendMarkdownAuthor(title, metadata.author);
+    }
+  }
+
+  if (firstContentLine < lines.size()) {
+    std::wstring firstLine = Trim(lines[firstContentLine]);
+    if (firstLine.rfind(L"#", 0) == 0) {
+      std::wstring title = StripMdHeading(firstLine);
+      if (!title.empty()) return AppendMarkdownAuthor(title, metadata.author);
+    }
+  }
+
+  return fallback;
+}
+
 std::wstring ExtractTextGroupTitle(const std::wstring& path) {
   const size_t slash = path.find_last_of(L"\\/");
   const std::wstring sourceName = slash == std::wstring::npos ? path : path.substr(slash + 1);
@@ -633,35 +688,12 @@ std::wstring ExtractTextGroupTitle(const std::wstring& path) {
   const std::wstring extension = dot == std::wstring::npos
     ? L""
     : ToLower(NormalizeExtension(path.substr(dot)));
+  const std::wstring fallback = sourceStem.empty() ? sourceName : sourceStem;
   if (extension != L".md") {
-    return sourceStem.empty() ? sourceName : sourceStem;
+    return fallback;
   }
 
-  std::vector<std::wstring> lines = SplitLines(ReadTextFilePrefix(path, 64 * 1024));
-  size_t contentStart = 0;
-  std::wstring title = TryParseTomlTitle(lines, contentStart);
-  if (!title.empty()) return title;
-
-  size_t firstContentLine = contentStart;
-  while (firstContentLine < lines.size() && Trim(lines[firstContentLine]).empty()) ++firstContentLine;
-
-  for (size_t i = contentStart; i < lines.size(); ++i) {
-    std::wstring line = Trim(lines[i]);
-    if (line.rfind(L"# ", 0) == 0) {
-      title = StripMdHeading(line);
-      if (!title.empty()) return title;
-    }
-  }
-
-  if (firstContentLine < lines.size()) {
-    std::wstring firstLine = Trim(lines[firstContentLine]);
-    if (firstLine.rfind(L"#", 0) == 0) {
-      title = StripMdHeading(firstLine);
-      if (!title.empty()) return title;
-    }
-  }
-
-  return sourceStem.empty() ? sourceName : sourceStem;
+  return ExtractMarkdownTitleByContent(path, fallback);
 }
 
 std::wstring ExtractSingleFileGroupTitle(const std::wstring& path, NoteGroupType type) {
@@ -673,31 +705,7 @@ std::wstring ExtractSingleFileGroupTitle(const std::wstring& path, NoteGroupType
 }
 
 std::wstring ExtractMarkdownDisplayName(const std::wstring& path, const std::wstring& fallback) {
-  std::vector<std::wstring> lines = SplitLines(ReadTextFilePrefix(path, 64 * 1024));
-  size_t contentStart = 0;
-  std::wstring title = TryParseTomlTitle(lines, contentStart);
-  if (!title.empty()) return title;
-
-  size_t firstContentLine = contentStart;
-  while (firstContentLine < lines.size() && Trim(lines[firstContentLine]).empty()) ++firstContentLine;
-
-  for (size_t i = contentStart; i < lines.size(); ++i) {
-    std::wstring line = Trim(lines[i]);
-    if (line.rfind(L"# ", 0) == 0) {
-      title = StripMdHeading(line);
-      if (!title.empty()) return title;
-    }
-  }
-
-  if (firstContentLine < lines.size()) {
-    std::wstring firstLine = Trim(lines[firstContentLine]);
-    if (firstLine.rfind(L"#", 0) == 0) {
-      title = StripMdHeading(firstLine);
-      if (!title.empty()) return title;
-    }
-  }
-
-  return fallback;
+  return ExtractMarkdownTitleByContent(path, fallback);
 }
 
 std::wstring ChooseCreateExtension(const NoteGroupConfig& group) {
@@ -941,9 +949,12 @@ bool LoadNotesConfig(const std::wstring& path, NotesConfig& config) {
 
   std::vector<std::wstring> sections = ini.GetSectionNames();
   for (const std::wstring& section : sections) {
-    if (section.rfind(L"file_action.", 0) == 0 || section.rfind(L"dir_action.", 0) == 0) {
+    if (section.rfind(L"action.", 0) == 0 || section.rfind(L"file_action.", 0) == 0 || section.rfind(L"dir_action.", 0) == 0) {
       ActionConfig action{};
-      if (section.rfind(L"file_action.", 0) == 0) {
+      if (section.rfind(L"action.", 0) == 0) {
+        action.id = section.substr(7);
+        action.target = ParseActionTarget(ToLower(ReadString(ini, section.c_str(), L"target", L"file")), ActionTarget::File);
+      } else if (section.rfind(L"file_action.", 0) == 0) {
         action.id = section.substr(12);
         action.target = ActionTarget::File;
       } else {
@@ -1333,6 +1344,9 @@ bool MoveTempNoteIntoGroup(const NoteGroupConfig& group, const std::wstring& sou
 }
 
 bool IsActionTargetCompatible(const ActionConfig& action, const NoteFile* file) {
+  if (action.target == ActionTarget::Both) {
+    return true;
+  }
   if (action.target == ActionTarget::Directory) {
     return file == nullptr;
   }

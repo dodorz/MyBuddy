@@ -482,7 +482,7 @@ MarkdownLine ParseMarkdownLine(const std::wstring& text) {
              (body[0] == L'-' || body[0] == L'*' || body[0] == L'+') &&
              body[1] == L' ') {
     line.kind = MarkdownLine::Kind::UnorderedList;
-    line.prefix = L"- ";
+    line.prefix = L"\x2022 ";
     content = body.substr(2);
   } else {
     size_t digitEnd = 0;
@@ -2625,7 +2625,7 @@ void App::OpenConfigFile() {
     actionIt = notesConfig_.actions.find(L"edit");
   }
   if (actionIt == notesConfig_.actions.end()) {
-    MessageBoxW(hwnd_, L"Opening config requires file_action.Edit.", L"MyBuddy", MB_OK | MB_ICONERROR);
+    MessageBoxW(hwnd_, L"Opening config requires action.Edit.", L"MyBuddy", MB_OK | MB_ICONERROR);
     return;
   }
 
@@ -2656,7 +2656,7 @@ void App::CreateNoteForGroup(int groupIndex) {
   if (group.type != NoteGroupType::Directory) return;
   auto actionIt = FindNewNoteEditAction(notesConfig_);
   if (actionIt == notesConfig_.actions.end()) {
-    MessageBoxW(hwnd_, L"New notes require file_action.Edit.", L"MyBuddy", MB_OK | MB_ICONERROR);
+    MessageBoxW(hwnd_, L"New notes require action.Edit.", L"MyBuddy", MB_OK | MB_ICONERROR);
     return;
   }
 

@@ -27,6 +27,7 @@ enum class NoteGroupLoadState {
 enum class ActionTarget {
   File,
   Directory,
+  Both,
 };
 
 enum class NoteGroupType {
