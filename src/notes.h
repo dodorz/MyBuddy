@@ -50,6 +50,8 @@ struct NoteGroupConfig {
   NoteGroupType type = NoteGroupType::Directory;
   bool expanded = true;
   bool showExtensions = false;
+  bool showSubdir = false;
+  std::vector<std::wstring> hideSubdirPatterns;
   std::vector<std::wstring> filePatterns;
   std::wstring createExtension;
   int maxItems = 5;
@@ -64,6 +66,8 @@ struct NoteGroupConfig {
 
 struct NoteGroupDefaults {
   bool showExtensions = false;
+  bool showSubdir = false;
+  std::vector<std::wstring> hideSubdirPatterns;
   std::vector<std::wstring> filePatterns{L"*.txt", L"*.md"};
   std::wstring createExtension;
   int maxItems = 5;
@@ -101,6 +105,7 @@ struct NoteFile {
 struct VisibleRow {
   enum class Type {
     Group,
+    Subdir,
     File,
     GroupMessage,
     GlobalMessage,
@@ -108,6 +113,7 @@ struct VisibleRow {
 
   Type type = Type::Group;
   int groupIndex = -1;
+  int subdirIndex = -1;
   int fileIndex = -1;
 };
 

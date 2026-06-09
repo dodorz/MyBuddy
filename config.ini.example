@@ -89,6 +89,15 @@ sortOrder=desc
 ; Whether dir-group file items show file extensions by default.
 ; Allowed values: 0, 1. Default: 0
 showExtensions=0
+; Whether dir groups show direct child directories as expandable entries.
+; Allowed values: 0, 1. Default: 0
+showSubdir=0
+; Direct child directory names matching any of these masks are hidden.
+; Matched against the directory name only.
+; If omitted, no subdirectories are hidden by the program.
+hideSubdirPatterns=.*
+; hideSubdirPatterns+=tmp*;.git
+; hideSubdirPatterns-=.*
 ; Default dirgroup item action.
 ; Must reference [action.*].
 ; defaultItemAction=Edit
@@ -183,6 +192,13 @@ path=C:\Users\USERNAME\Documents\Notes\Inbox
 ; Optional per-group override for whether dir-group file items show file extensions.
 ; Allowed values: 0, 1
 ; showExtensions=0
+; Optional per-group override for whether direct child directories are shown as expandable entries.
+; Allowed values: 0, 1
+; showSubdir=0
+; Optional per-group override for which direct child directory names are hidden.
+; Matched against the directory name only. Supports += and -= like filePatterns.
+; If omitted, the inherited value is used.
+; hideSubdirPatterns=.*
 ; Optional per-group override for file patterns.
 ; filePatterns=*.txt;*.md
 ; Optional per-group override for new-note extension.
@@ -256,6 +272,8 @@ maxItems=8
 sortBy=name
 sortOrder=asc
 showExtensions=0
+showSubdir=0
+hideSubdirPatterns=.*
 defaultItemAction=Edit
 deleteName=Trash
 ; deleteCommand=some-tool.exe "{file}"

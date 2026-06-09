@@ -23,7 +23,9 @@ constexpr UINT kTrayOpenCmd = 2001;
 constexpr UINT kTrayExitCmd = 2002;
 constexpr int kListRowHeight = 30;
 constexpr int kGroupIndent = 14;
+constexpr int kSubdirIndent = 28;
 constexpr int kFileIndent = 28;
+constexpr int kSubdirFileIndent = 42;
 constexpr int kGroupButtonWidth = 32;
 constexpr int kGroupAddWidth = 32;
 constexpr int kGroupClipboardWidth = 32;
@@ -236,6 +238,60 @@ void AppendConfiguredMenuEntries(HMENU menu,
     actionIds[nextActionId] = entry.actionId;
     ++nextActionId;
   }
+}
+
+bool WildcardMatchInsensitive(const wchar_t* pattern, const wchar_t* text) {
+  while (*pattern) {
+    if (*pattern == L'*') {
+      while (*pattern == L'*') ++pattern;
+      if (*pattern == L'\0') return true;
+      while (*text) {
+        if (WildcardMatchInsensitive(pattern, text)) return true;
+        ++text;
+      }
+      return WildcardMatchInsensitive(pattern, text);
+    }
+    if (*pattern == L'?') {
+      if (*text == L'\0') return false;
+      ++pattern;
+      ++text;
+      continue;
+    }
+    if (*text == L'\0' || towlower(*pattern) != towlower(*text)) {
+      return false;
+    }
+    ++pattern;
+    ++text;
+  }
+  return *text == L'\0';
+}
+
+bool MatchesAnyWildcardPattern(const std::wstring& text, const std::vector<std::wstring>& patterns) {
+  for (const std::wstring& pattern : patterns) {
+    if (!pattern.empty() && WildcardMatchInsensitive(pattern.c_str(), text.c_str())) {
+      return true;
+    }
+  }
+  return false;
+}
+
+std::vector<std::wstring> EnumerateDirectSubdirectories(const NoteGroupConfig& group) {
+  std::vector<std::wstring> subdirs;
+  WIN32_FIND_DATAW ffd{};
+  HANDLE h = FindFirstFileW((EnsureTrailingSlash(group.path) + L"*").c_str(), &ffd);
+  if (h == INVALID_HANDLE_VALUE) return subdirs;
+  do {
+    if ((ffd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0) continue;
+    if (wcscmp(ffd.cFileName, L".") == 0 || wcscmp(ffd.cFileName, L"..") == 0) continue;
+    if (MatchesAnyWildcardPattern(ffd.cFileName, group.hideSubdirPatterns)) continue;
+    subdirs.push_back(EnsureTrailingSlash(group.path) + ffd.cFileName);
+  } while (FindNextFileW(h, &ffd));
+  FindClose(h);
+
+  std::sort(subdirs.begin(), subdirs.end(), [](const std::wstring& a, const std::wstring& b) {
+    return _wcsicmp(a.c_str(), b.c_str()) < 0;
+  });
+  return subdirs;
 }
 
 bool IsSingleFileLineGroupType(NoteGroupType type) {
@@ -1892,6 +1948,11 @@ void App::RebuildAutoRefreshWatchers() {
       }
     }
     addWatcher(watchPath, i, false);
+    if (group.type == NoteGroupType::Directory && group.showSubdir) {
+      for (const std::wstring& subdirPath : EnumerateDirectSubdirectories(group)) {
+        addWatcher(subdirPath, i, false);
+      }
+    }
   }
 }
 
@@ -1956,12 +2017,19 @@ void App::ProcessPendingAutoRefreshes() {
 
 void App::RefreshNotes(const std::unordered_map<std::wstring, bool>* expandedStateByGroupId) {
   std::unordered_map<std::wstring, bool> showAllStateByGroupId;
+  std::unordered_map<std::wstring, std::unordered_map<std::wstring, bool>> subdirExpandedStateByGroupId;
   const int oldCount = static_cast<int>(std::min(notesConfig_.groups.size(), showAllGroups_.size()));
   for (int i = 0; i < oldCount; ++i) {
     showAllStateByGroupId[notesConfig_.groups[i].id] = showAllGroups_[i];
+    if (i < static_cast<int>(subdirsByGroup_.size())) {
+      for (const SubdirEntry& entry : subdirsByGroup_[i]) {
+        subdirExpandedStateByGroupId[notesConfig_.groups[i].id][entry.path] = entry.expanded;
+      }
+    }
   }
 
   notesByGroup_.clear();
+  subdirsByGroup_.clear();
   groupStates_.clear();
   expandedGroups_.clear();
   showAllGroups_.clear();
@@ -1987,6 +2055,10 @@ void App::RefreshNotes(const std::unordered_map<std::wstring, bool>* expandedSta
     }
     expandedGroups_.push_back(expanded);
     showAllGroups_.push_back(showAll);
+    subdirsByGroup_.push_back({});
+    const auto subdirIt = subdirExpandedStateByGroupId.find(group.id);
+    LoadSubdirEntriesForGroup(static_cast<int>(subdirsByGroup_.size()) - 1,
+      subdirIt != subdirExpandedStateByGroupId.end() ? &subdirIt->second : nullptr);
   }
   RebuildVisibleRows();
   RebuildAutoRefreshWatchers();
@@ -2007,10 +2079,77 @@ void App::RefreshGroup(int groupIndex) {
   if (groupIndex < 0 || groupIndex >= static_cast<int>(notesConfig_.groups.size())) return;
   NoteGroupLoadState state = NoteGroupLoadState::Ok;
   bool showAll = groupIndex < static_cast<int>(showAllGroups_.size()) && showAllGroups_[groupIndex];
+  std::unordered_map<std::wstring, bool> subdirExpandedStateByPath;
+  if (groupIndex < static_cast<int>(subdirsByGroup_.size())) {
+    for (const SubdirEntry& entry : subdirsByGroup_[groupIndex]) {
+      subdirExpandedStateByPath[entry.path] = entry.expanded;
+    }
+  }
   LoadNoteFiles(notesConfig_.groups[groupIndex], notesByGroup_[groupIndex], &state, showAll);
   groupStates_[groupIndex] = state;
+  LoadSubdirEntriesForGroup(groupIndex, &subdirExpandedStateByPath);
   RebuildVisibleRows();
   RebuildAutoRefreshWatchers();
+}
+
+void App::LoadSubdirEntriesForGroup(int groupIndex, const std::unordered_map<std::wstring, bool>* expandedStateByPath) {
+  if (groupIndex < 0 || groupIndex >= static_cast<int>(notesConfig_.groups.size())) return;
+  if (groupIndex >= static_cast<int>(subdirsByGroup_.size())) {
+    subdirsByGroup_.resize(notesConfig_.groups.size());
+  }
+
+  std::vector<SubdirEntry> entries;
+  const NoteGroupConfig& group = notesConfig_.groups[groupIndex];
+  if (group.type != NoteGroupType::Directory || !group.showSubdir) {
+    subdirsByGroup_[groupIndex].clear();
+    return;
+  }
+
+  for (const std::wstring& subdirPath : EnumerateDirectSubdirectories(group)) {
+    SubdirEntry entry{};
+    entry.path = subdirPath;
+    size_t slash = subdirPath.find_last_of(L"\\/");
+    entry.name = slash == std::wstring::npos ? subdirPath : subdirPath.substr(slash + 1);
+    if (entry.name.empty() && slash != std::wstring::npos) {
+      const std::wstring trimmed = subdirPath.substr(0, slash);
+      size_t slash2 = trimmed.find_last_of(L"\\/");
+      entry.name = slash2 == std::wstring::npos ? trimmed : trimmed.substr(slash2 + 1);
+    }
+
+    if (expandedStateByPath) {
+      if (auto it = expandedStateByPath->find(entry.path); it != expandedStateByPath->end()) {
+        entry.expanded = it->second;
+      }
+    }
+
+    NoteGroupConfig subdirGroup = group;
+    subdirGroup.path = entry.path;
+    subdirGroup.showSubdir = false;
+    LoadNoteFiles(subdirGroup, entry.files, &entry.state, false);
+    entries.push_back(std::move(entry));
+  }
+
+  subdirsByGroup_[groupIndex] = std::move(entries);
+}
+
+const NoteFile* App::GetGroupFile(int groupIndex, int subdirIndex, int fileIndex) const {
+  if (groupIndex < 0 || groupIndex >= static_cast<int>(notesConfig_.groups.size())) return nullptr;
+  if (subdirIndex >= 0) {
+    if (groupIndex >= static_cast<int>(subdirsByGroup_.size())) return nullptr;
+    if (subdirIndex >= static_cast<int>(subdirsByGroup_[groupIndex].size())) return nullptr;
+    const std::vector<NoteFile>& files = subdirsByGroup_[groupIndex][subdirIndex].files;
+    if (fileIndex < 0 || fileIndex >= static_cast<int>(files.size())) return nullptr;
+    return &files[fileIndex];
+  }
+
+  if (groupIndex >= static_cast<int>(notesByGroup_.size())) return nullptr;
+  if (fileIndex < 0 || fileIndex >= static_cast<int>(notesByGroup_[groupIndex].size())) return nullptr;
+  return &notesByGroup_[groupIndex][fileIndex];
+}
+
+const NoteFile* App::GetVisibleRowFile(const VisibleRow& row) const {
+  if (row.type != VisibleRow::Type::File) return nullptr;
+  return GetGroupFile(row.groupIndex, row.subdirIndex, row.fileIndex);
 }
 
 void App::RebuildVisibleRows() {
@@ -2025,14 +2164,27 @@ void App::RebuildVisibleRows() {
     visibleRows_.push_back({VisibleRow::Type::GlobalMessage, -1, -1});
   }
   for (int i = 0; i < static_cast<int>(notesConfig_.groups.size()); ++i) {
-    visibleRows_.push_back({VisibleRow::Type::Group, i, -1});
+    visibleRows_.push_back({VisibleRow::Type::Group, i, -1, -1});
     if (!expandedGroups_[i]) continue;
     if (groupStates_[i] != NoteGroupLoadState::Ok || notesByGroup_[i].empty()) {
-      visibleRows_.push_back({VisibleRow::Type::GroupMessage, i, -1});
-      continue;
+      if (!(i < static_cast<int>(subdirsByGroup_.size()) && !subdirsByGroup_[i].empty())) {
+        visibleRows_.push_back({VisibleRow::Type::GroupMessage, i, -1, -1});
+      }
     }
     for (int j = 0; j < static_cast<int>(notesByGroup_[i].size()); ++j) {
-      visibleRows_.push_back({VisibleRow::Type::File, i, j});
+      visibleRows_.push_back({VisibleRow::Type::File, i, -1, j});
+    }
+    if (i < static_cast<int>(subdirsByGroup_.size())) {
+      for (int j = 0; j < static_cast<int>(subdirsByGroup_[i].size()); ++j) {
+        visibleRows_.push_back({VisibleRow::Type::Subdir, i, j, -1});
+        if (!subdirsByGroup_[i][j].expanded) continue;
+        if (subdirsByGroup_[i][j].state != NoteGroupLoadState::Ok || subdirsByGroup_[i][j].files.empty()) {
+          continue;
+        }
+        for (int k = 0; k < static_cast<int>(subdirsByGroup_[i][j].files.size()); ++k) {
+          visibleRows_.push_back({VisibleRow::Type::File, i, j, k});
+        }
+      }
     }
   }
 
@@ -2095,6 +2247,10 @@ RECT App::GetGroupAddRect(const RECT& rowRect) const {
 
 RECT App::GetGroupClipboardRect(const RECT& rowRect) const {
   return GetGroupOpenRect(rowRect);
+}
+
+RECT App::GetSubdirToggleRect(const RECT& rowRect) const {
+  return RECT{ rowRect.left + kSubdirIndent, rowRect.top + 4, rowRect.left + kSubdirIndent + 20, rowRect.bottom - 4 };
 }
 
 std::wstring App::GetGroupHotTooltip(int rowIndex, POINT pt) const {
@@ -2181,7 +2337,10 @@ void App::DrawListItem(const DRAWITEMSTRUCT* dis) {
   RECT rc = dis->rcItem;
   HFONT oldFont = reinterpret_cast<HFONT>(SelectObject(dc, fontBody_));
 
-  HBRUSH bg = CreateSolidBrush(row.type == VisibleRow::Type::Group ? RGB(240, 244, 248) : RGB(255, 255, 255));
+  const COLORREF bgColor =
+    row.type == VisibleRow::Type::Group ? RGB(240, 244, 248) :
+    (row.type == VisibleRow::Type::Subdir ? RGB(248, 250, 252) : RGB(255, 255, 255));
+  HBRUSH bg = CreateSolidBrush(bgColor);
   FillRect(dc, &rc, bg);
   DeleteObject(bg);
 
@@ -2241,6 +2400,19 @@ void App::DrawListItem(const DRAWITEMSTRUCT* dis) {
       DrawTextW(dc, L"+", -1, &addRc, DT_SINGLELINE | DT_VCENTER | DT_CENTER);
       DrawTextW(dc, L"P", -1, &clipboardRc, DT_SINGLELINE | DT_VCENTER | DT_CENTER);
     }
+  } else if (row.type == VisibleRow::Type::Subdir) {
+    const SubdirEntry& subdir = subdirsByGroup_[row.groupIndex][row.subdirIndex];
+    RECT toggleRc = GetSubdirToggleRect(rc);
+    RECT textRc = rc;
+    textRc.left += kSubdirIndent + 18;
+    textRc.right -= 8;
+
+    SelectObject(dc, fontSymbol_);
+    DrawTextW(dc, subdir.expanded ? L"v" : L">", -1, &toggleRc, DT_SINGLELINE | DT_VCENTER | DT_CENTER);
+    SelectObject(dc, fontMeta_);
+    SetTextColor(dc, RGB(72, 84, 100));
+    std::wstring label = subdir.name + L"/";
+    DrawTextW(dc, label.c_str(), -1, &textRc, DT_SINGLELINE | DT_VCENTER | DT_LEFT | DT_END_ELLIPSIS);
   } else if (row.type == VisibleRow::Type::GroupMessage) {
     RECT textRc = rc;
     textRc.left += kFileIndent;
@@ -2250,10 +2422,15 @@ void App::DrawListItem(const DRAWITEMSTRUCT* dis) {
     std::wstring message = GetGroupStatusMessage(groupStates_[row.groupIndex], notesConfig_.groups[row.groupIndex]);
     DrawTextW(dc, message.c_str(), -1, &textRc, DT_SINGLELINE | DT_VCENTER | DT_LEFT | DT_END_ELLIPSIS);
   } else {
-    const NoteFile& file = notesByGroup_[row.groupIndex][row.fileIndex];
+    const NoteFile* filePtr = GetVisibleRowFile(row);
+    if (!filePtr) {
+      SelectObject(dc, oldFont);
+      return;
+    }
+    const NoteFile& file = *filePtr;
     const NoteGroupConfig& group = notesConfig_.groups[row.groupIndex];
     RECT nameRc = rc;
-    nameRc.left += kFileIndent;
+    nameRc.left += row.subdirIndex >= 0 ? kSubdirFileIndent : kFileIndent;
     RECT timeRc = rc;
     timeRc.right -= 8;
 
@@ -2398,7 +2575,9 @@ bool App::ResolveToolbarContext(const ToolbarButtonConfig& button, int& groupInd
   }
 
   if (row.type == VisibleRow::Type::File) {
-    file = notesByGroup_[row.groupIndex][row.fileIndex];
+    const NoteFile* selectedFile = GetVisibleRowFile(row);
+    if (!selectedFile) return false;
+    file = *selectedFile;
     filePtr = &file;
     return true;
   }
@@ -2470,14 +2649,15 @@ void App::RunToolbarButton(size_t index) {
   }
 }
 
-bool App::TryToggleCheckboxAtPoint(int groupIndex, int fileIndex, const RECT& rowRect, POINT pt) {
+bool App::TryToggleCheckboxAtPoint(int groupIndex, int subdirIndex, int fileIndex, const RECT& rowRect, POINT pt) {
   if (groupIndex < 0 || groupIndex >= static_cast<int>(notesConfig_.groups.size())) return false;
-  if (fileIndex < 0 || fileIndex >= static_cast<int>(notesByGroup_[groupIndex].size())) return false;
 
   const NoteGroupConfig& group = notesConfig_.groups[groupIndex];
   if (!IsSingleFileLineGroupType(group.type) || !listBox_) return false;
 
-  const NoteFile& file = notesByGroup_[groupIndex][fileIndex];
+  const NoteFile* filePtr = GetGroupFile(groupIndex, subdirIndex, fileIndex);
+  if (!filePtr) return false;
+  const NoteFile& file = *filePtr;
   const std::wstring& displayName = file.displayName.empty()
     ? (group.showExtensions ? file.name : file.stem)
     : file.displayName;
@@ -2485,7 +2665,7 @@ bool App::TryToggleCheckboxAtPoint(int groupIndex, int fileIndex, const RECT& ro
   if (checkbox.state == MarkdownCheckbox::State::None) return false;
 
   RECT nameRc = rowRect;
-  nameRc.left += kFileIndent;
+  nameRc.left += subdirIndex >= 0 ? kSubdirFileIndent : kFileIndent;
   RECT timeRc = rowRect;
   timeRc.right -= 8;
   nameRc.right = timeRc.right - 32;
@@ -2558,9 +2738,17 @@ void App::HandleListLeftClick(POINT pt) {
     return;
   }
 
+  if (row.type == VisibleRow::Type::Subdir) {
+    RECT toggleRc = GetSubdirToggleRect(rowRect);
+    if (PtInRect(&toggleRc, pt) || PtInRect(&rowRect, pt)) {
+      ToggleSubdir(row.groupIndex, row.subdirIndex);
+    }
+    return;
+  }
+
   if (row.type != VisibleRow::Type::File) return;
-  if (TryToggleCheckboxAtPoint(row.groupIndex, row.fileIndex, rowRect, pt)) return;
-  OpenFileNote(row.groupIndex, row.fileIndex);
+  if (TryToggleCheckboxAtPoint(row.groupIndex, row.subdirIndex, row.fileIndex, rowRect, pt)) return;
+  OpenFileNote(row.groupIndex, row.subdirIndex, row.fileIndex);
 }
 
 void App::HandleListRightClick(POINT pt) {
@@ -2579,7 +2767,7 @@ void App::HandleListRightClick(POINT pt) {
   if (row.type == VisibleRow::Type::Group) {
     RunGroupMenu(row.groupIndex, screenPt);
   } else if (row.type == VisibleRow::Type::File) {
-    RunFileMenu(row.groupIndex, row.fileIndex, screenPt);
+    RunFileMenu(row.groupIndex, row.subdirIndex, row.fileIndex, screenPt);
   } else {
     RunBlankMenu(screenPt);
   }
@@ -2588,6 +2776,13 @@ void App::HandleListRightClick(POINT pt) {
 void App::ToggleGroup(int groupIndex) {
   if (groupIndex < 0 || groupIndex >= static_cast<int>(expandedGroups_.size())) return;
   expandedGroups_[groupIndex] = !expandedGroups_[groupIndex];
+  RebuildVisibleRows();
+}
+
+void App::ToggleSubdir(int groupIndex, int subdirIndex) {
+  if (groupIndex < 0 || groupIndex >= static_cast<int>(subdirsByGroup_.size())) return;
+  if (subdirIndex < 0 || subdirIndex >= static_cast<int>(subdirsByGroup_[groupIndex].size())) return;
+  subdirsByGroup_[groupIndex][subdirIndex].expanded = !subdirsByGroup_[groupIndex][subdirIndex].expanded;
   RebuildVisibleRows();
 }
 
@@ -2744,26 +2939,28 @@ void App::CreateNoteFromClipboardForGroup(int groupIndex) {
   RefreshGroup(groupIndex);
 }
 
-void App::OpenFileNote(int groupIndex, int fileIndex) {
+void App::OpenFileNote(int groupIndex, int subdirIndex, int fileIndex) {
   if (groupIndex < 0 || groupIndex >= static_cast<int>(notesConfig_.groups.size())) return;
   const NoteGroupConfig& group = notesConfig_.groups[groupIndex];
   if (group.defaultItemAction.empty()) return;
   auto actionIt = notesConfig_.actions.find(group.defaultItemAction);
   if (actionIt == notesConfig_.actions.end()) return;
-  if (!IsActionTargetCompatible(actionIt->second, &notesByGroup_[groupIndex][fileIndex])) return;
+  const NoteFile* file = GetGroupFile(groupIndex, subdirIndex, fileIndex);
+  if (!file) return;
+  if (!IsActionTargetCompatible(actionIt->second, file)) return;
   std::wstring errorMessage;
   std::wstring command;
-  if (!ExecuteAction(actionIt->second, group, &notesByGroup_[groupIndex][fileIndex], &errorMessage, &command)) {
+  if (!ExecuteAction(actionIt->second, group, file, &errorMessage, &command)) {
     std::wstring message = L"Failed to run action:\n" + actionIt->second.title + L"\n\nCommand:\n" + command + L"\n\n" + errorMessage;
     MessageBoxW(hwnd_, message.c_str(), L"MyBuddy", MB_OK | MB_ICONERROR);
   }
 }
 
-void App::DeleteFileNote(int groupIndex, int fileIndex) {
+void App::DeleteFileNote(int groupIndex, int subdirIndex, int fileIndex) {
   if (groupIndex < 0 || groupIndex >= static_cast<int>(notesConfig_.groups.size())) return;
-  if (fileIndex < 0 || fileIndex >= static_cast<int>(notesByGroup_[groupIndex].size())) return;
   const NoteGroupConfig& group = notesConfig_.groups[groupIndex];
-  const NoteFile& file = notesByGroup_[groupIndex][fileIndex];
+  const NoteFile* file = GetGroupFile(groupIndex, subdirIndex, fileIndex);
+  if (!file) return;
 
   if (!group.deleteCommand.empty()) {
     ActionConfig deleteAction{};
@@ -2774,7 +2971,7 @@ void App::DeleteFileNote(int groupIndex, int fileIndex) {
 
     std::wstring errorMessage;
     std::wstring command;
-    if (!ExecuteActionAndWait(deleteAction, group, &file, &errorMessage, &command)) {
+    if (!ExecuteActionAndWait(deleteAction, group, file, &errorMessage, &command)) {
       std::wstring message = L"Failed to run delete command.\n\nCommand:\n" + command + L"\n\n" + errorMessage;
       MessageBoxW(hwnd_, message.c_str(), L"MyBuddy", MB_OK | MB_ICONERROR);
       return;
@@ -2784,7 +2981,7 @@ void App::DeleteFileNote(int groupIndex, int fileIndex) {
   }
 
   std::wstring errorMessage;
-  if (!MovePathToRecycleBin(file.path, &errorMessage)) {
+  if (!MovePathToRecycleBin(file->path, &errorMessage)) {
     std::wstring message = L"Failed to delete file.\n\n" + errorMessage;
     MessageBoxW(hwnd_, message.c_str(), L"MyBuddy", MB_OK | MB_ICONERROR);
     return;
@@ -2911,9 +3108,10 @@ void App::RunGroupMenu(int groupIndex, POINT screenPt) {
   }
 }
 
-void App::RunFileMenu(int groupIndex, int fileIndex, POINT screenPt) {
+void App::RunFileMenu(int groupIndex, int subdirIndex, int fileIndex, POINT screenPt) {
   const NoteGroupConfig& group = notesConfig_.groups[groupIndex];
-  const NoteFile& file = notesByGroup_[groupIndex][fileIndex];
+  const NoteFile* file = GetGroupFile(groupIndex, subdirIndex, fileIndex);
+  if (!file) return;
   HMENU menu = CreatePopupMenu();
   if (!menu) return;
   constexpr UINT kMenuRefresh = 5000;
@@ -2927,7 +3125,7 @@ void App::RunFileMenu(int groupIndex, int fileIndex, POINT screenPt) {
   if (!group.defaultItemAction.empty()) {
     auto it = notesConfig_.actions.find(group.defaultItemAction);
     if (it != notesConfig_.actions.end()) {
-      if (!IsActionTargetCompatible(it->second, &file)) {
+      if (!IsActionTargetCompatible(it->second, file)) {
         it = notesConfig_.actions.end();
       }
     }
@@ -2939,7 +3137,7 @@ void App::RunFileMenu(int groupIndex, int fileIndex, POINT screenPt) {
   }
 
   std::vector<ConfiguredMenuEntry> configuredEntries =
-    BuildConfiguredMenuEntries(group.itemActions, notesConfig_.actions, &file, !actionIds.empty(), &group.defaultItemAction);
+    BuildConfiguredMenuEntries(group.itemActions, notesConfig_.actions, file, !actionIds.empty(), &group.defaultItemAction);
   AppendConfiguredMenuEntries(menu, configuredEntries, notesConfig_.actions, nextActionId, actionIds);
   if (canDelete) AppendMenuW(menu, MF_STRING, kMenuDelete, group.deleteTitle.c_str());
   if (!actionIds.empty() || canDelete) AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
@@ -2951,7 +3149,7 @@ void App::RunFileMenu(int groupIndex, int fileIndex, POINT screenPt) {
     screenPt.x, screenPt.y, 0, hwnd_, nullptr);
   DestroyMenu(menu);
   if (canDelete && cmd == kMenuDelete) {
-    DeleteFileNote(groupIndex, fileIndex);
+    DeleteFileNote(groupIndex, subdirIndex, fileIndex);
   } else if (cmd == kMenuRefresh) {
     ReloadConfigAndRefreshNotes();
   } else if (cmd == kMenuConfig) {
@@ -2959,7 +3157,7 @@ void App::RunFileMenu(int groupIndex, int fileIndex, POINT screenPt) {
   } else if (auto it = actionIds.find(cmd); it != actionIds.end()) {
     std::wstring errorMessage;
     std::wstring command;
-    if (!ExecuteAction(notesConfig_.actions[it->second], group, &file, &errorMessage, &command)) {
+    if (!ExecuteAction(notesConfig_.actions[it->second], group, file, &errorMessage, &command)) {
       std::wstring message = L"Failed to run action:\n" + notesConfig_.actions[it->second].title + L"\n\nCommand:\n" + command + L"\n\n" + errorMessage;
       MessageBoxW(hwnd_, message.c_str(), L"MyBuddy", MB_OK | MB_ICONERROR);
     }

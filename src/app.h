@@ -66,6 +66,14 @@ private:
     ULONGLONG dueTick = 0;
   };
 
+  struct SubdirEntry {
+    std::wstring path;
+    std::wstring name;
+    std::vector<NoteFile> files;
+    NoteGroupLoadState state = NoteGroupLoadState::Ok;
+    bool expanded = false;
+  };
+
   static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
   static LRESULT CALLBACK HotZoneWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
   static LRESULT CALLBACK ListBoxProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
@@ -129,7 +137,7 @@ private:
   void RunToolbarButton(size_t index);
   void HandleListLeftClick(POINT pt);
   void HandleListRightClick(POINT pt);
-  bool TryToggleCheckboxAtPoint(int groupIndex, int fileIndex, const RECT& rowRect, POINT pt);
+  bool TryToggleCheckboxAtPoint(int groupIndex, int subdirIndex, int fileIndex, const RECT& rowRect, POINT pt);
   void UpdateListTooltip(POINT pt);
   void HideListTooltip();
   std::wstring GetGroupHotTooltip(int rowIndex, POINT pt) const;
@@ -140,20 +148,25 @@ private:
   RECT GetGroupOpenRect(const RECT& rowRect) const;
   RECT GetGroupAddRect(const RECT& rowRect) const;
   RECT GetGroupClipboardRect(const RECT& rowRect) const;
+  RECT GetSubdirToggleRect(const RECT& rowRect) const;
   void ToggleGroup(int groupIndex);
+  void ToggleSubdir(int groupIndex, int subdirIndex);
   void ShowAllForGroup(int groupIndex);
   void OpenGroupNote(int groupIndex);
   void OpenConfigFile();
   void CreateNoteForGroup(int groupIndex);
   void CreateNoteFromClipboardForGroup(int groupIndex);
-  void OpenFileNote(int groupIndex, int fileIndex);
-  void DeleteFileNote(int groupIndex, int fileIndex);
+  void OpenFileNote(int groupIndex, int subdirIndex, int fileIndex);
+  void DeleteFileNote(int groupIndex, int subdirIndex, int fileIndex);
   void DeleteTextGroupSource(int groupIndex);
   void RunGroupMenu(int groupIndex, POINT screenPt);
-  void RunFileMenu(int groupIndex, int fileIndex, POINT screenPt);
+  void RunFileMenu(int groupIndex, int subdirIndex, int fileIndex, POINT screenPt);
   void RunBlankMenu(POINT screenPt);
   void ReloadConfigAndRefreshNotes();
   void RefreshGroup(int groupIndex);
+  void LoadSubdirEntriesForGroup(int groupIndex, const std::unordered_map<std::wstring, bool>* expandedStateByPath = nullptr);
+  const NoteFile* GetVisibleRowFile(const VisibleRow& row) const;
+  const NoteFile* GetGroupFile(int groupIndex, int subdirIndex, int fileIndex) const;
 
   std::wstring GetAppDataDir() const;
   std::wstring GetProgramConfigPath() const;
@@ -178,6 +191,7 @@ private:
   AppState state_{};
   NotesConfig notesConfig_{};
   std::vector<std::vector<NoteFile>> notesByGroup_{};
+  std::vector<std::vector<SubdirEntry>> subdirsByGroup_{};
   std::vector<NoteGroupLoadState> groupStates_{};
   std::vector<bool> expandedGroups_{};
   std::vector<bool> showAllGroups_{};

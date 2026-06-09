@@ -846,6 +846,7 @@ bool LoadNotesConfig(const std::wstring& path, NotesConfig& config) {
   config.sharedDefaults.createExtension = NormalizeExtension(ReadString(ini, globalSection, L"createExtension"));
   config.sharedDefaults.maxItems = NormalizeMaxItems(ReadInt(ini, globalSection, L"maxItems", 5), 5);
   config.sharedDefaults.showExtensions = false;
+  config.sharedDefaults.showSubdir = false;
   config.sharedDefaults.defaultItemAction = ReadStringFallback(ini, globalSection, L"defaultItemAction", L"defaultFileAction");
   config.sharedDefaults.deleteTitle = ReadTitleOrName(ini, globalSection, L"deleteTitle", L"deleteName");
   config.sharedDefaults.deleteCommand = ReadString(ini, globalSection, L"deleteCommand");
@@ -871,6 +872,8 @@ bool LoadNotesConfig(const std::wstring& path, NotesConfig& config) {
     config.dirDefaults.sortBy);
   config.dirDefaults.sortOrder = ParseSortOrder(ReadString(ini, dirDefaultsSection, L"sortOrder"), config.dirDefaults.sortOrder);
   config.dirDefaults.showExtensions = ReadBool(ini, dirDefaultsSection, L"showExtensions", config.dirDefaults.showExtensions);
+  config.dirDefaults.showSubdir = ReadBool(ini, dirDefaultsSection, L"showSubdir", config.dirDefaults.showSubdir);
+  config.dirDefaults.hideSubdirPatterns = ReadLayeredList(ini, dirDefaultsSection, L"hideSubdirPatterns", nullptr, {});
   config.dirDefaults.defaultItemAction = ReadStringFallback(ini, dirDefaultsSection, L"defaultItemAction", L"defaultFileAction",
     config.dirDefaults.defaultItemAction.c_str());
   config.dirDefaults.deleteTitle = ReadTitleOrName(ini, dirDefaultsSection, L"deleteTitle", L"deleteName",
@@ -991,6 +994,12 @@ bool LoadNotesConfig(const std::wstring& path, NotesConfig& config) {
         group.showExtensions = group.type == NoteGroupType::Directory
           ? ReadBool(ini, section.c_str(), L"showExtensions", defaults.showExtensions)
           : false;
+        group.showSubdir = group.type == NoteGroupType::Directory
+          ? ReadBool(ini, section.c_str(), L"showSubdir", defaults.showSubdir)
+          : false;
+        group.hideSubdirPatterns = group.type == NoteGroupType::Directory
+          ? ReadLayeredList(ini, section.c_str(), L"hideSubdirPatterns", nullptr, defaults.hideSubdirPatterns)
+          : std::vector<std::wstring>{};
         group.filePatterns = ReadLayeredList(ini, section.c_str(), L"filePatterns", nullptr, defaults.filePatterns);
         group.createExtension = NormalizeExtension(ReadString(ini, section.c_str(), L"createExtension", defaults.createExtension.c_str()));
         group.maxItems = NormalizeMaxItems(ReadInt(ini, section.c_str(), L"maxItems", defaults.maxItems), defaults.maxItems);
