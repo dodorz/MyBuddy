@@ -314,60 +314,382 @@ App::ToolbarScope ParseToolbarScope(const std::wstring& value) {
 
 bool IsSupportedToolbarIcon(const std::wstring& value) {
   const std::wstring normalized = ToLower(Trim(value));
-  return normalized == L"touch" || normalized == L"proxy";
+  return normalized == L"touch" || normalized == L"proxy" || normalized == L"terminal" ||
+         normalized == L"folder" || normalized == L"refresh" || normalized == L"edit" ||
+         normalized == L"copy";
 }
 
 void DrawTouchToolbarIcon(HDC dc, const RECT& rc, COLORREF color) {
-  HPEN pen = CreatePen(PS_SOLID, 2, color);
-  HGDIOBJ oldPen = SelectObject(dc, pen);
-  HGDIOBJ oldBrush = SelectObject(dc, GetStockObject(HOLLOW_BRUSH));
+  COLORREF dark = color;
+  COLORREF mid = RGB(74, 144, 217);
+  COLORREF light = RGB(160, 195, 230);
+  COLORREF skin = RGB(220, 185, 155);
 
-  Rectangle(dc, rc.left + 3, rc.top + 2, rc.left + 11, rc.top + 13);
-  MoveToEx(dc, rc.left + 8, rc.top + 2, nullptr);
-  LineTo(dc, rc.left + 11, rc.top + 5);
-  MoveToEx(dc, rc.left + 8, rc.top + 2, nullptr);
-  LineTo(dc, rc.left + 8, rc.top + 5);
-  MoveToEx(dc, rc.left + 8, rc.top + 5, nullptr);
-  LineTo(dc, rc.left + 11, rc.top + 5);
+  HBRUSH skinBrush = CreateSolidBrush(skin);
+  HGDIOBJ oldBrush = SelectObject(dc, skinBrush);
+  HPEN skinPen = CreatePen(PS_SOLID, 1, RGB(180, 140, 110));
+  HGDIOBJ oldPen = SelectObject(dc, skinPen);
 
-  MoveToEx(dc, rc.left + 12, rc.top + 12, nullptr);
-  LineTo(dc, rc.left + 12, rc.top + 6);
-  MoveToEx(dc, rc.left + 9, rc.top + 9, nullptr);
-  LineTo(dc, rc.left + 12, rc.top + 6);
-  LineTo(dc, rc.left + 15, rc.top + 9);
+  POINT finger[] = {
+    {rc.left + 7, rc.top + 1}, {rc.left + 9, rc.top + 1},
+    {rc.left + 9, rc.top + 8}, {rc.left + 11, rc.top + 8},
+    {rc.left + 11, rc.top + 10}, {rc.left + 12, rc.top + 11},
+    {rc.left + 12, rc.top + 13}, {rc.left + 4, rc.top + 13},
+    {rc.left + 4, rc.top + 11}, {rc.left + 5, rc.top + 10},
+    {rc.left + 5, rc.top + 8}, {rc.left + 7, rc.top + 8},
+  };
+  Polygon(dc, finger, 12);
+
+  POINT palm[] = {
+    {rc.left + 3, rc.top + 9}, {rc.left + 5, rc.top + 9},
+    {rc.left + 5, rc.top + 14}, {rc.left + 3, rc.top + 14},
+  };
+  Polygon(dc, palm, 4);
+
+  DeleteObject(skinPen);
+  DeleteObject(skinBrush);
+
+  HBRUSH cuffBrush = CreateSolidBrush(dark);
+  SelectObject(dc, cuffBrush);
+  HPEN cuffPen = CreatePen(PS_SOLID, 1, dark);
+  SelectObject(dc, cuffPen);
+
+  POINT cuff[] = {
+    {rc.left + 3, rc.top + 12}, {rc.left + 5, rc.top + 12},
+    {rc.left + 5, rc.top + 15}, {rc.left + 3, rc.top + 15},
+  };
+  Polygon(dc, cuff, 4);
+
+  DeleteObject(cuffPen);
+  DeleteObject(cuffBrush);
+
+  HBRUSH tipBrush = CreateSolidBrush(mid);
+  SelectObject(dc, tipBrush);
+  HPEN tipPen = CreatePen(PS_SOLID, 1, mid);
+  SelectObject(dc, tipPen);
+
+  POINT tiptop[] = {
+    {rc.left + 7, rc.top + 1}, {rc.left + 9, rc.top + 1},
+    {rc.left + 9, rc.top + 3}, {rc.left + 7, rc.top + 3},
+  };
+  Polygon(dc, tiptop, 4);
+
+  DeleteObject(tipPen);
+  DeleteObject(tipBrush);
 
   SelectObject(dc, oldBrush);
   SelectObject(dc, oldPen);
-  DeleteObject(pen);
 }
 
 void DrawProxyToolbarIcon(HDC dc, const RECT& rc, COLORREF color) {
-  HPEN pen = CreatePen(PS_SOLID, 2, color);
-  HBRUSH brush = CreateSolidBrush(color);
-  HGDIOBJ oldPen = SelectObject(dc, pen);
-  HGDIOBJ oldBrush = SelectObject(dc, brush);
+  COLORREF dark = color;
+  COLORREF mid = RGB(74, 144, 217);
+  COLORREF light = RGB(160, 195, 230);
 
-  Ellipse(dc, rc.left + 2, rc.top + 6, rc.left + 6, rc.top + 10);
-  Ellipse(dc, rc.left + 12, rc.top + 6, rc.left + 16, rc.top + 10);
-  MoveToEx(dc, rc.left + 6, rc.top + 8, nullptr);
-  LineTo(dc, rc.left + 12, rc.top + 8);
+  HBRUSH lightBrush = CreateSolidBrush(light);
+  HGDIOBJ oldBrush = SelectObject(dc, lightBrush);
+  HPEN lightPen = CreatePen(PS_SOLID, 1, light);
+  HGDIOBJ oldPen = SelectObject(dc, lightPen);
 
-  SelectObject(dc, GetStockObject(HOLLOW_BRUSH));
-  Arc(dc, rc.left + 4, rc.top + 2, rc.left + 14, rc.top + 12, rc.left + 8, rc.top + 2, rc.left + 12, rc.top + 6);
-  Arc(dc, rc.left + 4, rc.top + 6, rc.left + 14, rc.top + 16, rc.left + 12, rc.top + 16, rc.left + 8, rc.top + 12);
-  MoveToEx(dc, rc.left + 12, rc.top + 6, nullptr);
-  LineTo(dc, rc.left + 10, rc.top + 4);
-  MoveToEx(dc, rc.left + 12, rc.top + 6, nullptr);
-  LineTo(dc, rc.left + 10, rc.top + 6);
-  MoveToEx(dc, rc.left + 8, rc.top + 12, nullptr);
-  LineTo(dc, rc.left + 10, rc.top + 12);
-  MoveToEx(dc, rc.left + 8, rc.top + 12, nullptr);
-  LineTo(dc, rc.left + 10, rc.top + 14);
+  Ellipse(dc, rc.left + 3, rc.top + 2, rc.left + 7, rc.top + 6);
+  Ellipse(dc, rc.left + 9, rc.top + 2, rc.left + 13, rc.top + 6);
+
+  DeleteObject(lightPen);
+  DeleteObject(lightBrush);
+
+  HBRUSH midBrush = CreateSolidBrush(mid);
+  SelectObject(dc, midBrush);
+  HPEN midPen = CreatePen(PS_SOLID, 1, mid);
+  SelectObject(dc, midPen);
+
+  HPEN thickPen = CreatePen(PS_SOLID, 2, mid);
+  SelectObject(dc, thickPen);
+  MoveToEx(dc, rc.left + 5, rc.top + 6, nullptr);
+  LineTo(dc, rc.left + 5, rc.top + 10);
+  MoveToEx(dc, rc.left + 11, rc.top + 6, nullptr);
+  LineTo(dc, rc.left + 11, rc.top + 10);
+  SelectObject(dc, midPen);
+  DeleteObject(thickPen);
+
+  DeleteObject(midPen);
+  DeleteObject(midBrush);
+
+  HBRUSH darkBrush = CreateSolidBrush(dark);
+  SelectObject(dc, darkBrush);
+  HPEN darkPen = CreatePen(PS_SOLID, 1, dark);
+  SelectObject(dc, darkPen);
+
+  POINT shield[] = {
+    {rc.left + 5, rc.top + 10}, {rc.left + 11, rc.top + 10},
+    {rc.left + 11, rc.top + 13}, {rc.left + 8, rc.top + 15},
+    {rc.left + 5, rc.top + 13},
+  };
+  Polygon(dc, shield, 5);
+
+  DeleteObject(darkPen);
+  DeleteObject(darkBrush);
+
+  HPEN checkPen = CreatePen(PS_SOLID, 2, RGB(255, 255, 255));
+  SelectObject(dc, checkPen);
+  HGDIOBJ hOld = SelectObject(dc, GetStockObject(HOLLOW_BRUSH));
+  MoveToEx(dc, rc.left + 7, rc.top + 12, nullptr);
+  LineTo(dc, rc.left + 8, rc.top + 14);
+  LineTo(dc, rc.left + 10, rc.top + 11);
+  SelectObject(dc, hOld);
+  DeleteObject(checkPen);
 
   SelectObject(dc, oldBrush);
   SelectObject(dc, oldPen);
-  DeleteObject(brush);
-  DeleteObject(pen);
+}
+
+void DrawTerminalToolbarIcon(HDC dc, const RECT& rc, COLORREF color) {
+  COLORREF dark = color;
+  COLORREF mid = RGB(74, 144, 217);
+  COLORREF light = RGB(160, 195, 230);
+  COLORREF bg = RGB(240, 244, 250);
+
+  HBRUSH darkBrush = CreateSolidBrush(dark);
+  HGDIOBJ oldBrush = SelectObject(dc, darkBrush);
+  HPEN darkPen = CreatePen(PS_SOLID, 1, dark);
+  HGDIOBJ oldPen = SelectObject(dc, darkPen);
+
+  RoundRect(dc, rc.left + 2, rc.top + 2, rc.left + 14, rc.top + 14, 2, 2);
+
+  HBRUSH lightBrush = CreateSolidBrush(light);
+  SelectObject(dc, lightBrush);
+  HPEN lightPen = CreatePen(PS_SOLID, 1, light);
+  SelectObject(dc, lightPen);
+  Rectangle(dc, rc.left + 3, rc.top + 3, rc.left + 13, rc.top + 5);
+  DeleteObject(lightPen);
+  DeleteObject(lightBrush);
+
+  HBRUSH bgBrush = CreateSolidBrush(bg);
+  SelectObject(dc, bgBrush);
+  HPEN bgPen = CreatePen(PS_SOLID, 1, bg);
+  SelectObject(dc, bgPen);
+  Rectangle(dc, rc.left + 3, rc.top + 5, rc.left + 13, rc.top + 13);
+  DeleteObject(bgPen);
+  DeleteObject(bgBrush);
+
+  SelectObject(dc, darkBrush);
+
+  POINT prompt[] = {
+    {rc.left + 5, rc.top + 7}, {rc.left + 7, rc.top + 8},
+    {rc.left + 5, rc.top + 9},
+  };
+  Polygon(dc, prompt, 3);
+
+  HPEN midPen = CreatePen(PS_SOLID, 1, mid);
+  SelectObject(dc, midPen);
+  MoveToEx(dc, rc.left + 8, rc.top + 8, nullptr);
+  LineTo(dc, rc.left + 11, rc.top + 8);
+  DeleteObject(midPen);
+
+  DeleteObject(darkPen);
+  DeleteObject(darkBrush);
+
+  SelectObject(dc, oldBrush);
+  SelectObject(dc, oldPen);
+}
+
+void DrawFolderToolbarIcon(HDC dc, const RECT& rc, COLORREF color) {
+  COLORREF dark = color;
+  COLORREF mid = RGB(74, 144, 217);
+  COLORREF light = RGB(160, 195, 230);
+
+  HBRUSH lightBrush = CreateSolidBrush(light);
+  HGDIOBJ oldBrush = SelectObject(dc, lightBrush);
+  HPEN lightPen = CreatePen(PS_SOLID, 1, light);
+  HGDIOBJ oldPen = SelectObject(dc, lightPen);
+
+  POINT tab[] = {
+    {rc.left + 2, rc.top + 3}, {rc.left + 2, rc.top + 5},
+    {rc.left + 7, rc.top + 5}, {rc.left + 6, rc.top + 3},
+  };
+  Polygon(dc, tab, 4);
+
+  DeleteObject(lightPen);
+  DeleteObject(lightBrush);
+
+  HBRUSH darkBrush = CreateSolidBrush(dark);
+  SelectObject(dc, darkBrush);
+  HPEN darkPen = CreatePen(PS_SOLID, 1, dark);
+  SelectObject(dc, darkPen);
+
+  POINT body[] = {
+    {rc.left + 2, rc.top + 5}, {rc.left + 2, rc.top + 13},
+    {rc.left + 14, rc.top + 13}, {rc.left + 14, rc.top + 5},
+  };
+  Polygon(dc, body, 4);
+
+  DeleteObject(darkPen);
+  DeleteObject(darkBrush);
+
+  HBRUSH midBrush = CreateSolidBrush(mid);
+  SelectObject(dc, midBrush);
+  HPEN midPen = CreatePen(PS_SOLID, 1, mid);
+  SelectObject(dc, midPen);
+
+  Rectangle(dc, rc.left + 4, rc.top + 7, rc.left + 12, rc.top + 11);
+
+  DeleteObject(midPen);
+  DeleteObject(midBrush);
+
+  SelectObject(dc, oldBrush);
+  SelectObject(dc, oldPen);
+}
+
+void DrawRefreshToolbarIcon(HDC dc, const RECT& rc, COLORREF color) {
+  COLORREF dark = color;
+  COLORREF mid = RGB(74, 144, 217);
+
+  HPEN midPen = CreatePen(PS_SOLID, 2, mid);
+  HGDIOBJ oldPen = SelectObject(dc, midPen);
+  HGDIOBJ oldBrush = SelectObject(dc, GetStockObject(HOLLOW_BRUSH));
+
+  Arc(dc, rc.left + 3, rc.top + 3, rc.left + 13, rc.top + 13, rc.left + 13, rc.top + 7, rc.left + 7, rc.top + 3);
+
+  Arc(dc, rc.left + 3, rc.top + 3, rc.left + 13, rc.top + 13, rc.left + 3, rc.top + 9, rc.left + 9, rc.top + 13);
+
+  DeleteObject(midPen);
+
+  HBRUSH darkBrush = CreateSolidBrush(dark);
+  SelectObject(dc, darkBrush);
+  HPEN darkPen = CreatePen(PS_SOLID, 1, dark);
+  SelectObject(dc, darkPen);
+
+  POINT arrow1[] = {
+    {rc.left + 10, rc.top + 2}, {rc.left + 13, rc.top + 2},
+    {rc.left + 13, rc.top + 5},
+  };
+  Polygon(dc, arrow1, 3);
+
+  POINT arrow2[] = {
+    {rc.left + 3, rc.top + 11}, {rc.left + 3, rc.top + 14},
+    {rc.left + 6, rc.top + 14},
+  };
+  Polygon(dc, arrow2, 3);
+
+  DeleteObject(darkPen);
+  DeleteObject(darkBrush);
+
+  SelectObject(dc, oldBrush);
+  SelectObject(dc, oldPen);
+}
+
+void DrawEditToolbarIcon(HDC dc, const RECT& rc, COLORREF color) {
+  COLORREF dark = color;
+  COLORREF mid = RGB(74, 144, 217);
+  COLORREF light = RGB(160, 195, 230);
+  COLORREF tip = RGB(255, 210, 100);
+
+  HBRUSH darkBrush = CreateSolidBrush(dark);
+  HGDIOBJ oldBrush = SelectObject(dc, darkBrush);
+  HPEN darkPen = CreatePen(PS_SOLID, 1, dark);
+  HGDIOBJ oldPen = SelectObject(dc, darkPen);
+
+  POINT body[] = {
+    {rc.left + 10, rc.top + 2}, {rc.left + 12, rc.top + 2},
+    {rc.left + 14, rc.top + 4}, {rc.left + 5, rc.top + 13},
+    {rc.left + 3, rc.top + 13}, {rc.left + 3, rc.top + 11},
+  };
+  Polygon(dc, body, 6);
+
+  DeleteObject(darkPen);
+  DeleteObject(darkBrush);
+
+  HBRUSH lightBrush = CreateSolidBrush(light);
+  SelectObject(dc, lightBrush);
+  HPEN lightPen = CreatePen(PS_SOLID, 1, light);
+  SelectObject(dc, lightPen);
+
+  POINT stripe[] = {
+    {rc.left + 10, rc.top + 2}, {rc.left + 12, rc.top + 2},
+    {rc.left + 13, rc.top + 3}, {rc.left + 11, rc.top + 3},
+  };
+  Polygon(dc, stripe, 4);
+
+  DeleteObject(lightPen);
+  DeleteObject(lightBrush);
+
+  HBRUSH tipBrush = CreateSolidBrush(tip);
+  SelectObject(dc, tipBrush);
+  HPEN tipPen = CreatePen(PS_SOLID, 1, RGB(200, 160, 60));
+  SelectObject(dc, tipPen);
+
+  POINT tiptop[] = {
+    {rc.left + 3, rc.top + 11}, {rc.left + 3, rc.top + 13},
+    {rc.left + 5, rc.top + 13},
+  };
+  Polygon(dc, tiptop, 3);
+
+  DeleteObject(tipPen);
+  DeleteObject(tipBrush);
+
+  HBRUSH midBrush = CreateSolidBrush(mid);
+  SelectObject(dc, midBrush);
+  HPEN midPen = CreatePen(PS_SOLID, 1, mid);
+  SelectObject(dc, midPen);
+
+  POINT eraser[] = {
+    {rc.left + 2, rc.top + 13}, {rc.left + 2, rc.top + 15},
+    {rc.left + 4, rc.top + 15}, {rc.left + 4, rc.top + 13},
+  };
+  Polygon(dc, eraser, 4);
+
+  DeleteObject(midPen);
+  DeleteObject(midBrush);
+
+  SelectObject(dc, oldBrush);
+  SelectObject(dc, oldPen);
+}
+
+void DrawCopyToolbarIcon(HDC dc, const RECT& rc, COLORREF color) {
+  COLORREF dark = color;
+  COLORREF mid = RGB(74, 144, 217);
+  COLORREF light = RGB(160, 195, 230);
+
+  HBRUSH lightBrush = CreateSolidBrush(light);
+  HGDIOBJ oldBrush = SelectObject(dc, lightBrush);
+  HPEN lightPen = CreatePen(PS_SOLID, 1, light);
+  HGDIOBJ oldPen = SelectObject(dc, lightPen);
+
+  POINT back[] = {
+    {rc.left + 3, rc.top + 4}, {rc.left + 3, rc.top + 12},
+    {rc.left + 11, rc.top + 12}, {rc.left + 11, rc.top + 4},
+  };
+  Polygon(dc, back, 4);
+
+  DeleteObject(lightPen);
+  DeleteObject(lightBrush);
+
+  HBRUSH darkBrush = CreateSolidBrush(dark);
+  SelectObject(dc, darkBrush);
+  HPEN darkPen = CreatePen(PS_SOLID, 1, dark);
+  SelectObject(dc, darkPen);
+
+  POINT front[] = {
+    {rc.left + 5, rc.top + 6}, {rc.left + 5, rc.top + 14},
+    {rc.left + 13, rc.top + 14}, {rc.left + 13, rc.top + 6},
+  };
+  Polygon(dc, front, 4);
+
+  DeleteObject(darkPen);
+  DeleteObject(darkBrush);
+
+  HBRUSH midBrush = CreateSolidBrush(mid);
+  SelectObject(dc, midBrush);
+  HPEN midPen = CreatePen(PS_SOLID, 1, mid);
+  SelectObject(dc, midPen);
+
+  Rectangle(dc, rc.left + 7, rc.top + 8, rc.left + 11, rc.top + 10);
+  Rectangle(dc, rc.left + 7, rc.top + 11, rc.left + 11, rc.top + 13);
+
+  DeleteObject(midPen);
+  DeleteObject(midBrush);
+
+  SelectObject(dc, oldBrush);
+  SelectObject(dc, oldPen);
 }
 
 struct MarkdownCheckbox {
@@ -1014,6 +1336,57 @@ LRESULT App::HandleMainMessage(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_ENTERSIZEMOVE:
       inMoveSize_ = true;
       return 0;
+    case WM_MOUSEMOVE: {
+      TRACKMOUSEEVENT tme{};
+      tme.cbSize = sizeof(tme);
+      tme.dwFlags = TME_LEAVE;
+      tme.hwndTrack = hwnd;
+      TrackMouseEvent(&tme);
+
+      if (toolbarTooltip_) {
+        POINT pt{ GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
+        HWND hoveredBtn = ChildWindowFromPoint(hwnd, pt);
+        static HWND lastHoveredBtn = nullptr;
+        if (hoveredBtn != lastHoveredBtn) {
+          lastHoveredBtn = hoveredBtn;
+          if (hoveredBtn && hoveredBtn != hwnd) {
+            for (size_t i = 0; i < toolbarButtons_.size(); ++i) {
+              if (toolbarButtons_[i].hwnd == hoveredBtn) {
+                TOOLINFOW ti{};
+                ti.cbSize = sizeof(ti);
+                ti.hwnd = hwnd_;
+                ti.uId = reinterpret_cast<UINT_PTR>(hoveredBtn);
+                SendMessageW(toolbarTooltip_, TTM_UPDATETIPTEXTW, 0, reinterpret_cast<LPARAM>(&ti));
+                POINT screenPt = pt;
+                ClientToScreen(hwnd, &screenPt);
+                SendMessageW(toolbarTooltip_, TTM_TRACKPOSITION, 0, MAKELPARAM(screenPt.x + 10, screenPt.y + 20));
+                SendMessageW(toolbarTooltip_, TTM_TRACKACTIVATE, TRUE, reinterpret_cast<LPARAM>(&ti));
+                break;
+              }
+            }
+          } else {
+            TOOLINFOW ti{};
+            ti.cbSize = sizeof(ti);
+            ti.hwnd = hwnd_;
+            ti.uId = 0;
+            SendMessageW(toolbarTooltip_, TTM_TRACKACTIVATE, FALSE, reinterpret_cast<LPARAM>(&ti));
+          }
+        }
+      }
+      break;
+    }
+    case WM_MOUSELEAVE: {
+      static HWND lastHoveredBtn = nullptr;
+      lastHoveredBtn = nullptr;
+      if (toolbarTooltip_) {
+        TOOLINFOW ti{};
+        ti.cbSize = sizeof(ti);
+        ti.hwnd = hwnd_;
+        ti.uId = 0;
+        SendMessageW(toolbarTooltip_, TTM_TRACKACTIVATE, FALSE, reinterpret_cast<LPARAM>(&ti));
+      }
+      break;
+    }
     case WM_MEASUREITEM:
       if (wp == 1) {
         auto* mi = reinterpret_cast<MEASUREITEMSTRUCT*>(lp);
@@ -1785,6 +2158,8 @@ void App::CreateToolbarButtons() {
   if (toolbarTooltip_) {
     SetWindowPos(toolbarTooltip_, HWND_TOPMOST, 0, 0, 0, 0,
       SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+    SendMessageW(toolbarTooltip_, TTM_SETDELAYTIME, TTDT_INITIAL, 0);
+    SendMessageW(toolbarTooltip_, TTM_SETMAXTIPWIDTH, 0, 300);
   }
 
   for (size_t i = 0; i < toolbarButtons_.size(); ++i) {
@@ -1803,7 +2178,7 @@ void App::CreateToolbarButtons() {
     if (toolbarTooltip_ && button.hwnd) {
       TOOLINFOW ti{};
       ti.cbSize = sizeof(ti);
-      ti.uFlags = TTF_SUBCLASS | TTF_IDISHWND;
+      ti.uFlags = TTF_IDISHWND;
       ti.hwnd = hwnd_;
       ti.uId = reinterpret_cast<UINT_PTR>(button.hwnd);
       ti.lpszText = const_cast<LPWSTR>(button.title.c_str());
@@ -2530,6 +2905,16 @@ void App::DrawToolbarButton(const DRAWITEMSTRUCT* dis) {
     DrawTouchToolbarIcon(dc, iconRc, iconColor);
   } else if (button.icon == L"proxy") {
     DrawProxyToolbarIcon(dc, iconRc, iconColor);
+  } else if (button.icon == L"terminal") {
+    DrawTerminalToolbarIcon(dc, iconRc, iconColor);
+  } else if (button.icon == L"folder") {
+    DrawFolderToolbarIcon(dc, iconRc, iconColor);
+  } else if (button.icon == L"refresh") {
+    DrawRefreshToolbarIcon(dc, iconRc, iconColor);
+  } else if (button.icon == L"edit") {
+    DrawEditToolbarIcon(dc, iconRc, iconColor);
+  } else if (button.icon == L"copy") {
+    DrawCopyToolbarIcon(dc, iconRc, iconColor);
   }
 
   if (dis->itemState & ODS_FOCUS) {

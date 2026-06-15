@@ -45,7 +45,7 @@ Supported keys:
   - Tooltip text
   - If missing, defaults to the button id
 - `icon`
-  - Supported in this version: `touch`, `proxy`
+  - Supported: `touch`, `proxy`, `terminal`, `folder`, `refresh`, `edit`, `copy`
   - Built-in toolbar glyph name, not a file path
 - `scope`
   - Supported: `global`, `group`, `file`

@@ -13,7 +13,7 @@ globalHotKey=Ctrl+Alt+B
 [toolbar]
 ; Optional top toolbar buttons, in display order, separated by ';'.
 ; If omitted, all [toolbar_button.*] sections are auto-discovered.
-; Allowed icon values in this version: touch, proxy
+; Allowed icon values: touch, proxy, terminal, folder, refresh, edit, copy
 ; icon uses built-in button glyph names, not icon file paths.
 ; Allowed scope values: global, group, file
 ; buttons=touchNote;proxyCheck
@@ -21,7 +21,7 @@ globalHotKey=Ctrl+Alt+B
 [toolbar_button.touchNote]
 ; Shown in tooltip.
 ; title=Touch
-; Allowed icon values in this version: touch, proxy
+; Allowed icon values: touch, proxy, terminal, folder, refresh, edit, copy
 ; icon=touch
 ; file scope means the command runs against the current file item.
 ; scope=file
