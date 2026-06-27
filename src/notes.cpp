@@ -372,26 +372,47 @@ std::wstring SanitizeFileBaseName(std::wstring value) {
   return value;
 }
 
+void TrimIncompleteUtf8(std::string& bytes) {
+  if (bytes.empty()) return;
+  size_t len = bytes.size();
+  size_t seqStart = len;
+  while (seqStart > 0 && (static_cast<unsigned char>(bytes[seqStart - 1]) & 0xC0) == 0x80) {
+    --seqStart;
+  }
+  if (seqStart == 0) return;
+  unsigned char lead = static_cast<unsigned char>(bytes[seqStart - 1]);
+  int expectedLen;
+  if (lead < 0x80) return;
+  if (lead < 0xC0) return;
+  if (lead < 0xE0) expectedLen = 2;
+  else if (lead < 0xF0) expectedLen = 3;
+  else if (lead < 0xF8) expectedLen = 4;
+  else return;
+  int actualLen = static_cast<int>(len - seqStart + 1);
+  if (actualLen < expectedLen) {
+    bytes.resize(seqStart - 1);
+  }
+}
+
 std::wstring DecodeTextBytes(const std::string& bytes) {
   if (bytes.empty()) return L"";
-  const char* data = bytes.data();
-  int size = static_cast<int>(bytes.size());
-  if (size >= 3 && static_cast<unsigned char>(data[0]) == 0xEF &&
+  std::string data(bytes);
+  if (data.size() >= 3 && static_cast<unsigned char>(data[0]) == 0xEF &&
       static_cast<unsigned char>(data[1]) == 0xBB &&
       static_cast<unsigned char>(data[2]) == 0xBF) {
-    data += 3;
-    size -= 3;
+    data.erase(0, 3);
   }
-  int wideLen = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, data, size, nullptr, 0);
+  TrimIncompleteUtf8(data);
+  int wideLen = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, data.data(), static_cast<int>(data.size()), nullptr, 0);
   if (wideLen > 0) {
     std::wstring text(wideLen, L'\0');
-    MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, data, size, text.data(), wideLen);
+    MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, data.data(), static_cast<int>(data.size()), text.data(), wideLen);
     return text;
   }
-  wideLen = MultiByteToWideChar(CP_ACP, 0, data, size, nullptr, 0);
+  wideLen = MultiByteToWideChar(CP_ACP, 0, bytes.data(), static_cast<int>(bytes.size()), nullptr, 0);
   if (wideLen > 0) {
     std::wstring text(wideLen, L'\0');
-    MultiByteToWideChar(CP_ACP, 0, data, size, text.data(), wideLen);
+    MultiByteToWideChar(CP_ACP, 0, bytes.data(), static_cast<int>(bytes.size()), text.data(), wideLen);
     return text;
   }
   return L"";
