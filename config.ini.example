@@ -90,6 +90,7 @@ sortOrder=desc
 ; Allowed values: 0, 1. Default: 0
 showExtensions=0
 ; Whether dir groups show direct child directories as expandable entries.
+; Shown child directories are also valid drag-and-drop targets for moving note files.
 ; Allowed values: 0, 1. Default: 0
 showSubdir=0
 ; Direct child directory names matching any of these masks are hidden.
@@ -193,6 +194,7 @@ path=C:\Users\USERNAME\Documents\Notes\Inbox
 ; Allowed values: 0, 1
 ; showExtensions=0
 ; Optional per-group override for whether direct child directories are shown as expandable entries.
+; Shown child directories accept file drops, letting you move notes between subdirectories.
 ; Allowed values: 0, 1
 ; showSubdir=0
 ; Optional per-group override for which direct child directory names are hidden.

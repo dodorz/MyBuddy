@@ -1261,6 +1261,67 @@ bool ToggleTodoTxtTask(const NoteFile& file, std::wstring* errorMessage) {
   return WriteEditableTextFile(file.path, textFile, lines, errorMessage);
 }
 
+bool MoveTextFileLine(const NoteFile& file, int targetLineNumber, bool insertAfter, std::wstring* errorMessage) {
+  if (file.path.empty() || file.lineNumber <= 0 || targetLineNumber <= 0) {
+    if (errorMessage) *errorMessage = L"Invalid text line item.";
+    return false;
+  }
+
+  EditableTextFile textFile{};
+  if (!ReadEditableTextFile(file.path, textFile, errorMessage)) return false;
+
+  std::vector<std::wstring> lines = SplitLines(textFile.text);
+  const size_t sourceIndex = static_cast<size_t>(file.lineNumber - 1);
+  const size_t targetIndex = static_cast<size_t>(targetLineNumber - 1);
+  if (sourceIndex >= lines.size() || targetIndex >= lines.size()) {
+    if (errorMessage) *errorMessage = L"Target line is out of range.";
+    return false;
+  }
+  if (sourceIndex == targetIndex) return true;
+
+  size_t insertIndex = targetIndex + (insertAfter ? 1 : 0);
+  std::wstring movedLine = std::move(lines[sourceIndex]);
+  lines.erase(lines.begin() + static_cast<std::ptrdiff_t>(sourceIndex));
+  if (sourceIndex < insertIndex) --insertIndex;
+  lines.insert(lines.begin() + static_cast<std::ptrdiff_t>(insertIndex), std::move(movedLine));
+  return WriteEditableTextFile(file.path, textFile, lines, errorMessage);
+}
+
+bool MoveNoteFileToDirectory(const NoteFile& file, const std::wstring& targetDirectory, std::wstring* errorMessage) {
+  if (file.path.empty() || targetDirectory.empty()) {
+    if (errorMessage) *errorMessage = L"Source file or destination directory is empty.";
+    return false;
+  }
+
+  DWORD sourceAttributes = GetFileAttributesW(file.path.c_str());
+  if (sourceAttributes == INVALID_FILE_ATTRIBUTES || (sourceAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0) {
+    if (errorMessage) *errorMessage = L"Source item is not an existing file.";
+    return false;
+  }
+  DWORD targetAttributes = GetFileAttributesW(targetDirectory.c_str());
+  if (targetAttributes == INVALID_FILE_ATTRIBUTES || (targetAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0) {
+    if (errorMessage) *errorMessage = L"Destination directory does not exist: " + targetDirectory;
+    return false;
+  }
+
+  const size_t slash = file.path.find_last_of(L"\\/");
+  const std::wstring fileName = slash == std::wstring::npos ? file.path : file.path.substr(slash + 1);
+  if (fileName.empty()) {
+    if (errorMessage) *errorMessage = L"Source file name is empty.";
+    return false;
+  }
+
+  const std::wstring targetPath = JoinPath(targetDirectory, fileName);
+  if (_wcsicmp(file.path.c_str(), targetPath.c_str()) == 0) return true;
+  if (!MoveFileExW(file.path.c_str(), targetPath.c_str(), MOVEFILE_COPY_ALLOWED | MOVEFILE_WRITE_THROUGH)) {
+    if (errorMessage) {
+      *errorMessage = L"Failed to move file to destination directory: " + FormatWindowsErrorMessage(GetLastError());
+    }
+    return false;
+  }
+  return true;
+}
+
 bool CreateNoteInGroup(const NoteGroupConfig& group, std::wstring& createdPath, std::wstring* errorMessage) {
   if (group.type != NoteGroupType::Directory) {
     if (errorMessage) *errorMessage = L"Only directory groups support creating new notes.";

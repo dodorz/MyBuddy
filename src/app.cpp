@@ -1537,7 +1537,50 @@ LRESULT App::HandleHotZoneMessage(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
 LRESULT App::HandleListBoxMessage(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
   switch (msg) {
+    case WM_LBUTTONDOWN: {
+      HideListTooltip();
+      POINT pt{ GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
+      ArmItemDrag(pt);
+      suppressNextListButtonUp_ = false;
+      if (itemDrag_.armed) {
+        // DragDetect owns the initial press until Windows has decided whether
+        // the pointer crossed the system drag threshold. This prevents the
+        // list box's normal click handling from launching View mid-drag.
+        const int rowIndex = HitTestRow(pt);
+        if (rowIndex >= 0) {
+          SendMessageW(listBox_, LB_SETCURSEL, static_cast<WPARAM>(rowIndex), 0);
+          currentRowIndex_ = rowIndex;
+          UpdateToolbarButtons();
+        }
+        SetFocus(hwnd);
+        if (!DragDetect(hwnd, pt)) {
+          POINT releasePt{};
+          GetCursorPos(&releasePt);
+          ScreenToClient(hwnd, &releasePt);
+          itemDrag_ = ItemDrag{};
+          suppressNextListButtonUp_ = true;
+          HandleListLeftClick(releasePt);
+          return 0;
+        }
+
+        itemDrag_.active = true;
+        SetCapture(hwnd);
+        POINT dragPt{};
+        GetCursorPos(&dragPt);
+        ScreenToClient(hwnd, &dragPt);
+        UpdateItemDrag(dragPt);
+        SetCursor(LoadCursorW(nullptr, itemDrag_.dropAllowed ? IDC_SIZEALL : IDC_NO));
+        return 0;
+      }
+      break;
+    }
     case WM_MOUSEMOVE: {
+      if (itemDrag_.active) {
+        POINT pt{ GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
+        UpdateItemDrag(pt);
+        SetCursor(LoadCursorW(nullptr, itemDrag_.dropAllowed ? IDC_SIZEALL : IDC_NO));
+        return 0;
+      }
       TRACKMOUSEEVENT tme{};
       tme.cbSize = sizeof(tme);
       tme.dwFlags = TME_LEAVE;
@@ -1552,10 +1595,27 @@ LRESULT App::HandleListBoxMessage(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
       break;
     case WM_LBUTTONUP: {
       HideListTooltip();
+      if (suppressNextListButtonUp_) {
+        suppressNextListButtonUp_ = false;
+        return 0;
+      }
       POINT pt{ GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
+      if (itemDrag_.active) {
+        FinishItemDrag(pt);
+        return 0;
+      }
+      itemDrag_ = ItemDrag{};
       HandleListLeftClick(pt);
       return 0;
     }
+    case WM_CAPTURECHANGED:
+      // A list box may take capture itself while processing WM_LBUTTONDOWN.
+      // That is still the beginning of a potential drag, not a cancellation.
+      if (itemDrag_.active) CancelItemDrag();
+      break;
+    case WM_CANCELMODE:
+      CancelItemDrag();
+      break;
     case WM_RBUTTONUP: {
       HideListTooltip();
       POINT pt{ GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
@@ -2866,6 +2926,26 @@ void App::DrawListItem(const DRAWITEMSTRUCT* dis) {
     }
   }
 
+  if (itemDrag_.active && itemDrag_.dropAllowed && itemDrag_.dropRowIndex == static_cast<int>(dis->itemID)) {
+    if (IsSingleFileLineGroupType(itemDrag_.sourceGroupType)) {
+      const int y = itemDrag_.insertAfter ? rc.bottom - 2 : rc.top + 1;
+      HPEN markerPen = CreatePen(PS_SOLID, 2, RGB(42, 112, 204));
+      HGDIOBJ oldPen = SelectObject(dc, markerPen);
+      MoveToEx(dc, rc.left + 4, y, nullptr);
+      LineTo(dc, rc.right - 4, y);
+      SelectObject(dc, oldPen);
+      DeleteObject(markerPen);
+    } else {
+      HPEN markerPen = CreatePen(PS_SOLID, 2, RGB(42, 112, 204));
+      HGDIOBJ oldPen = SelectObject(dc, markerPen);
+      HGDIOBJ oldBrush = SelectObject(dc, GetStockObject(HOLLOW_BRUSH));
+      Rectangle(dc, rc.left + 1, rc.top + 1, rc.right - 1, rc.bottom - 1);
+      SelectObject(dc, oldBrush);
+      SelectObject(dc, oldPen);
+      DeleteObject(markerPen);
+    }
+  }
+
   SelectObject(dc, oldFont);
 }
 
@@ -3089,6 +3169,144 @@ int App::HitTestRow(POINT pt) const {
   int index = LOWORD(hit);
   if (index < 0 || index >= static_cast<int>(visibleRows_.size())) return -1;
   return index;
+}
+
+bool App::GetDirectoryDropTarget(const VisibleRow& row, std::wstring& directory) const {
+  directory.clear();
+  if (row.groupIndex < 0 || row.groupIndex >= static_cast<int>(notesConfig_.groups.size())) return false;
+  const NoteGroupConfig& group = notesConfig_.groups[row.groupIndex];
+  if (group.type != NoteGroupType::Directory) return false;
+
+  if (row.type == VisibleRow::Type::Group) {
+    directory = group.path;
+    return true;
+  }
+  if (row.type == VisibleRow::Type::Subdir) {
+    if (row.groupIndex >= static_cast<int>(subdirsByGroup_.size()) || row.subdirIndex < 0 ||
+        row.subdirIndex >= static_cast<int>(subdirsByGroup_[row.groupIndex].size())) {
+      return false;
+    }
+    directory = subdirsByGroup_[row.groupIndex][row.subdirIndex].path;
+    return true;
+  }
+  if (row.type == VisibleRow::Type::File) {
+    const NoteFile* file = GetVisibleRowFile(row);
+    if (!file) return false;
+    directory = file->dir;
+    return true;
+  }
+  return false;
+}
+
+void App::ArmItemDrag(POINT pt) {
+  itemDrag_ = ItemDrag{};
+  const int rowIndex = HitTestRow(pt);
+  if (rowIndex < 0) return;
+  const VisibleRow& row = visibleRows_[rowIndex];
+  if (row.type != VisibleRow::Type::File || row.groupIndex < 0 ||
+      row.groupIndex >= static_cast<int>(notesConfig_.groups.size())) {
+    return;
+  }
+
+  const NoteFile* file = GetVisibleRowFile(row);
+  if (!file) return;
+  itemDrag_.armed = true;
+  itemDrag_.sourceGroupIndex = row.groupIndex;
+  itemDrag_.sourceGroupType = notesConfig_.groups[row.groupIndex].type;
+  itemDrag_.sourceFile = *file;
+  itemDrag_.start = pt;
+}
+
+void App::UpdateItemDrag(POINT pt) {
+  if (!itemDrag_.armed) return;
+  if (!itemDrag_.active) {
+    const int dx = std::abs(pt.x - itemDrag_.start.x);
+    const int dy = std::abs(pt.y - itemDrag_.start.y);
+    if (dx < GetSystemMetrics(SM_CXDRAG) && dy < GetSystemMetrics(SM_CYDRAG)) return;
+    itemDrag_.active = true;
+    SetCapture(listBox_);
+    HideListTooltip();
+  }
+
+  const int oldDropRow = itemDrag_.dropRowIndex;
+  const bool oldAllowed = itemDrag_.dropAllowed;
+  const bool oldInsertAfter = itemDrag_.insertAfter;
+  itemDrag_.dropRowIndex = HitTestRow(pt);
+  itemDrag_.dropAllowed = false;
+  itemDrag_.insertAfter = false;
+
+  if (itemDrag_.dropRowIndex >= 0) {
+    const VisibleRow& targetRow = visibleRows_[itemDrag_.dropRowIndex];
+    if (itemDrag_.sourceGroupType == NoteGroupType::Directory) {
+      std::wstring targetDirectory;
+      if (GetDirectoryDropTarget(targetRow, targetDirectory) &&
+          _wcsicmp(EnsureTrailingSlash(itemDrag_.sourceFile.dir).c_str(),
+            EnsureTrailingSlash(targetDirectory).c_str()) != 0) {
+        itemDrag_.dropAllowed = true;
+      }
+    } else if (IsSingleFileLineGroupType(itemDrag_.sourceGroupType) &&
+               targetRow.type == VisibleRow::Type::File &&
+               targetRow.groupIndex == itemDrag_.sourceGroupIndex) {
+      const NoteFile* targetFile = GetVisibleRowFile(targetRow);
+      if (targetFile && targetFile->lineNumber > 0 && targetFile->lineNumber != itemDrag_.sourceFile.lineNumber &&
+          _wcsicmp(targetFile->path.c_str(), itemDrag_.sourceFile.path.c_str()) == 0) {
+        const RECT targetRect = GetRowRect(itemDrag_.dropRowIndex);
+        itemDrag_.insertAfter = pt.y >= (targetRect.top + targetRect.bottom) / 2;
+        itemDrag_.dropAllowed = true;
+      }
+    }
+  }
+
+  if (oldDropRow != itemDrag_.dropRowIndex || oldAllowed != itemDrag_.dropAllowed ||
+      oldInsertAfter != itemDrag_.insertAfter) {
+    InvalidateList();
+  }
+}
+
+void App::CancelItemDrag() {
+  if (!itemDrag_.armed) return;
+  const bool wasActive = itemDrag_.active;
+  itemDrag_ = ItemDrag{};
+  if (wasActive && GetCapture() == listBox_) ReleaseCapture();
+  InvalidateList();
+}
+
+void App::FinishItemDrag(POINT pt) {
+  if (!itemDrag_.active) {
+    itemDrag_ = ItemDrag{};
+    return;
+  }
+  UpdateItemDrag(pt);
+  const ItemDrag drag = itemDrag_;
+  itemDrag_ = ItemDrag{};
+  if (GetCapture() == listBox_) ReleaseCapture();
+  InvalidateList();
+  if (!drag.dropAllowed || drag.dropRowIndex < 0 || drag.dropRowIndex >= static_cast<int>(visibleRows_.size())) return;
+
+  const VisibleRow targetRow = visibleRows_[drag.dropRowIndex];
+  std::wstring errorMessage;
+  if (drag.sourceGroupType == NoteGroupType::Directory) {
+    std::wstring targetDirectory;
+    if (!GetDirectoryDropTarget(targetRow, targetDirectory)) return;
+    if (!MoveNoteFileToDirectory(drag.sourceFile, targetDirectory, &errorMessage)) {
+      MessageBoxW(hwnd_, (L"Failed to move file.\n\n" + errorMessage).c_str(), L"MyBuddy", MB_OK | MB_ICONERROR);
+      return;
+    }
+    RefreshGroup(drag.sourceGroupIndex);
+    if (targetRow.groupIndex != drag.sourceGroupIndex) RefreshGroup(targetRow.groupIndex);
+    return;
+  }
+
+  if (!IsSingleFileLineGroupType(drag.sourceGroupType) || targetRow.type != VisibleRow::Type::File ||
+      targetRow.groupIndex != drag.sourceGroupIndex) {
+    return;
+  }
+  const NoteFile* targetFile = GetVisibleRowFile(targetRow);
+  if (!targetFile || !MoveTextFileLine(drag.sourceFile, targetFile->lineNumber, drag.insertAfter, &errorMessage)) {
+    MessageBoxW(hwnd_, (L"Failed to reorder text line.\n\n" + errorMessage).c_str(), L"MyBuddy", MB_OK | MB_ICONERROR);
+    return;
+  }
+  RefreshGroup(drag.sourceGroupIndex);
 }
 
 void App::HandleListLeftClick(POINT pt) {

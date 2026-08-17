@@ -122,6 +122,10 @@ void LoadNoteFiles(const NoteGroupConfig& group, std::vector<NoteFile>& files, N
   bool ignoreMaxItems = false);
 bool ToggleMarkdownCheckbox(const NoteFile& file, std::wstring* errorMessage = nullptr);
 bool ToggleTodoTxtTask(const NoteFile& file, std::wstring* errorMessage = nullptr);
+bool MoveTextFileLine(const NoteFile& file, int targetLineNumber, bool insertAfter,
+  std::wstring* errorMessage = nullptr);
+bool MoveNoteFileToDirectory(const NoteFile& file, const std::wstring& targetDirectory,
+  std::wstring* errorMessage = nullptr);
 bool CreateNoteInGroup(const NoteGroupConfig& group, std::wstring& createdPath, std::wstring* errorMessage = nullptr);
 bool CreateTempNoteForGroup(const NoteGroupConfig& group, std::wstring& createdPath, std::wstring* errorMessage = nullptr);
 bool MoveTempNoteIntoGroup(const NoteGroupConfig& group, const std::wstring& sourcePath, std::wstring& finalPath, std::wstring* errorMessage = nullptr);

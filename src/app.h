@@ -74,6 +74,18 @@ private:
     bool expanded = false;
   };
 
+  struct ItemDrag {
+    bool armed = false;
+    bool active = false;
+    bool dropAllowed = false;
+    int sourceGroupIndex = -1;
+    NoteGroupType sourceGroupType = NoteGroupType::Directory;
+    NoteFile sourceFile{};
+    POINT start{};
+    int dropRowIndex = -1;
+    bool insertAfter = false;
+  };
+
   static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
   static LRESULT CALLBACK HotZoneWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
   static LRESULT CALLBACK ListBoxProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
@@ -137,6 +149,11 @@ private:
   void RunToolbarButton(size_t index);
   void HandleListLeftClick(POINT pt);
   void HandleListRightClick(POINT pt);
+  void ArmItemDrag(POINT pt);
+  void UpdateItemDrag(POINT pt);
+  void FinishItemDrag(POINT pt);
+  void CancelItemDrag();
+  bool GetDirectoryDropTarget(const VisibleRow& row, std::wstring& directory) const;
   bool TryToggleCheckboxAtPoint(int groupIndex, int subdirIndex, int fileIndex, const RECT& rowRect, POINT pt);
   void UpdateListTooltip(POINT pt);
   void HideListTooltip();
@@ -212,5 +229,7 @@ private:
   bool stateLoaded_ = false;
   bool listTooltipActive_ = false;
   int currentRowIndex_ = -1;
+  ItemDrag itemDrag_{};
+  bool suppressNextListButtonUp_ = false;
   std::vector<AutoRefreshWatcher> autoRefreshWatchers_{};
 };

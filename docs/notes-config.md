@@ -12,6 +12,8 @@ The config file must be saved as UTF-8 without BOM.
 - If a `text` group points to a Markdown file and that file starts with TOML front matter delimited by `+++` or `---`, the front matter block is ignored.
 - Groups are shown together in one list.
 - Group headers are collapsible.
+- Directory-group file items can be dragged to a directory-group header, subdirectory header, or file item to move them into that folder. The source and destination may belong to different groups or to different direct subdirectories of one group. Drops into the current folder are ignored and MyBuddy never overwrites an existing destination file.
+- `textgroup` and `todogroup` line items can be dragged onto another line in the same group to reorder their source-file lines. Drop above or below the target line to choose the insertion position.
 - The add button belongs to the group header.
 - File actions and group actions are both defined in config.
 
@@ -121,6 +123,13 @@ defaultFileAction=Edit
 fileActions=Edit;reveal
 groupActions=
 ```
+
+## Drag and Drop
+
+- Dragging begins after the pointer moves beyond the system drag threshold, so normal clicks still open items or toggle checkboxes.
+- For directory groups, valid drop targets are directory-group headers, shown subdirectory headers, and visible directory-group file items. The target is the folder represented by that row; the moved filename is preserved.
+- For text and todo groups, a drop is valid only on a different visible line in the same group. The source file's encoding, byte-order mark, and newline convention are preserved when its lines are rewritten.
+- Line order is the physical order in the source file. Set `sortBy=line` and `sortOrder=asc` if the displayed order should directly match drag-and-drop order.
 
 ## Default Section
 

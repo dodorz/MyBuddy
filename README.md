@@ -25,6 +25,8 @@ cmake --build --preset vs-x64-release
 - Notes are configured from `config.ini`.
 - Each note group maps to a directory and is shown in one flat grouped list.
 - Group headers can be collapsed and include a `+` button for creating a new note.
+- Drag directory-group file items onto a directory-group header, subdirectory header, or file item to move the file into that target folder. Drops within the current folder are ignored; existing destination filenames are never overwritten.
+- Drag `textgroup` or `todogroup` line items onto another line in the same group to reorder source-file lines. The blue marker indicates whether the line will be inserted before or after the target.
 - File actions and group actions are configured as command lines in `config.ini`.
 - The list shows inline status rows for empty groups, missing directories, and missing note-group configuration.
 - Notes config reference: [docs/notes-config.md](/C:/~\Projects\MyBuddy\docs\notes-config.md)
