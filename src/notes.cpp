@@ -789,6 +789,15 @@ bool SplitExecutableAndParameters(const std::wstring& command, std::wstring& exe
   return !executable.empty();
 }
 
+bool IsCmdExecutable(const std::wstring& executable) {
+  size_t pos = executable.find_last_of(L"\\/:");
+  std::wstring name = (pos == std::wstring::npos) ? executable : executable.substr(pos + 1);
+  if (name.size() >= 4 && ToLower(name.substr(name.size() - 4)) == L".exe") {
+    name = name.substr(0, name.size() - 4);
+  }
+  return ToLower(name) == L"cmd";
+}
+
 bool StartActionProcess(const ActionConfig& action, const NoteGroupConfig& group, const NoteFile* file,
   HANDLE& processHandle, std::wstring* errorMessage, std::wstring* resolvedCommand) {
   if (!IsActionTargetCompatible(action, file)) {
@@ -819,7 +828,7 @@ bool StartActionProcess(const ActionConfig& action, const NoteGroupConfig& group
   sei.lpFile = executable.c_str();
   sei.lpParameters = parameters.empty() ? nullptr : parameters.c_str();
   sei.lpDirectory = workingDirectory.empty() ? nullptr : workingDirectory.c_str();
-  sei.nShow = SW_SHOWNORMAL;
+  sei.nShow = IsCmdExecutable(executable) ? SW_HIDE : SW_SHOWNORMAL;
 
   BOOL ok = ShellExecuteExW(&sei);
   if (!ok) {
