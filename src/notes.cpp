@@ -821,6 +821,26 @@ bool StartActionProcess(const ActionConfig& action, const NoteGroupConfig& group
   }
 
   const std::wstring workingDirectory = file ? file->dir : GetGroupDirectory(group);
+  if (action.showConsole == 0) {
+    std::wstring cmdLine = executable;
+    if (cmdLine.find_first_of(L" \t") != std::wstring::npos) {
+      cmdLine = L"\"" + cmdLine + L"\"";
+    }
+    if (!parameters.empty()) cmdLine += L" " + parameters;
+    STARTUPINFOW si{};
+    PROCESS_INFORMATION pi{};
+    si.cb = sizeof(si);
+    if (!CreateProcessW(nullptr, &cmdLine[0], nullptr, nullptr, FALSE,
+        CREATE_NO_WINDOW, nullptr,
+        workingDirectory.empty() ? nullptr : workingDirectory.c_str(),
+        &si, &pi)) {
+      if (errorMessage) *errorMessage = FormatWindowsErrorMessage(GetLastError());
+      return false;
+    }
+    CloseHandle(pi.hThread);
+    processHandle = pi.hProcess;
+    return true;
+  }
   SHELLEXECUTEINFOW sei{};
   sei.cbSize = sizeof(sei);
   sei.fMask = SEE_MASK_FLAG_NO_UI | SEE_MASK_NOCLOSEPROCESS;
@@ -830,8 +850,6 @@ bool StartActionProcess(const ActionConfig& action, const NoteGroupConfig& group
   sei.lpDirectory = workingDirectory.empty() ? nullptr : workingDirectory.c_str();
   if (action.showConsole == 1) {
     sei.nShow = SW_SHOWNORMAL;
-  } else if (action.showConsole == 0) {
-    sei.nShow = SW_HIDE;
   } else {
     sei.nShow = IsCmdExecutable(executable) ? SW_HIDE : SW_SHOWNORMAL;
   }
