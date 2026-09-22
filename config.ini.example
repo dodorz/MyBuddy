@@ -181,6 +181,10 @@ command=explorer.exe /select,"{file}"
 ; If omitted, the action id "Terminal" is used as the title.
 target=dir
 command=wt.exe -d "{group_dir}"
+; Whether to show the console window when running this action.
+; 1 = show console window, 0 = hide console window.
+; Default: -1 (auto-detect; console apps hide the window, GUI apps show it).
+; showConsole=0
 
 [dirgroup.inbox]
 ; Group title shown in the main list.

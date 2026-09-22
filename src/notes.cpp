@@ -828,7 +828,13 @@ bool StartActionProcess(const ActionConfig& action, const NoteGroupConfig& group
   sei.lpFile = executable.c_str();
   sei.lpParameters = parameters.empty() ? nullptr : parameters.c_str();
   sei.lpDirectory = workingDirectory.empty() ? nullptr : workingDirectory.c_str();
-  sei.nShow = IsCmdExecutable(executable) ? SW_HIDE : SW_SHOWNORMAL;
+  if (action.showConsole == 1) {
+    sei.nShow = SW_SHOWNORMAL;
+  } else if (action.showConsole == 0) {
+    sei.nShow = SW_HIDE;
+  } else {
+    sei.nShow = IsCmdExecutable(executable) ? SW_HIDE : SW_SHOWNORMAL;
+  }
 
   BOOL ok = ShellExecuteExW(&sei);
   if (!ok) {
@@ -997,6 +1003,7 @@ bool LoadNotesConfig(const std::wstring& path, NotesConfig& config) {
       action.title = ReadString(ini, section.c_str(), L"title");
       if (action.title.empty()) action.title = action.id;
       action.command = ReadString(ini, section.c_str(), L"command");
+      action.showConsole = ReadInt(ini, section.c_str(), L"showConsole", -1);
       if (!action.id.empty() && !action.title.empty() && !action.command.empty()) {
         config.actions[action.id] = action;
       }

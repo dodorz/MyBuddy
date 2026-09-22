@@ -41,6 +41,7 @@ struct ActionConfig {
   std::wstring title;
   std::wstring command;
   ActionTarget target = ActionTarget::File;
+  int showConsole = -1;
 };
 
 struct NoteGroupConfig {

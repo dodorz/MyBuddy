@@ -241,6 +241,10 @@ Supported keys:
   - Full command template.
   - Executed via `ShellExecuteExW`.
   - If shell behavior is needed, explicitly configure `cmd.exe /c ...`.
+- `showConsole`
+  - Whether to show the console window for console applications.
+  - `1` = show console window, `0` = hide console window.
+  - Default: `-1` (auto-detect; console apps hide the window, GUI apps show it).
 
 Example:
 
