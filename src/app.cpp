@@ -1336,57 +1336,65 @@ LRESULT App::HandleMainMessage(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_ENTERSIZEMOVE:
       inMoveSize_ = true;
       return 0;
-    case WM_MOUSEMOVE: {
-      TRACKMOUSEEVENT tme{};
-      tme.cbSize = sizeof(tme);
-      tme.dwFlags = TME_LEAVE;
-      tme.hwndTrack = hwnd;
-      TrackMouseEvent(&tme);
+     case WM_MOUSEMOVE: {
+       TRACKMOUSEEVENT tme{};
+       tme.cbSize = sizeof(tme);
+       tme.dwFlags = TME_LEAVE;
+       tme.hwndTrack = hwnd;
+       TrackMouseEvent(&tme);
 
-      if (toolbarTooltip_) {
-        POINT pt{ GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
-        HWND hoveredBtn = ChildWindowFromPoint(hwnd, pt);
-        static HWND lastHoveredBtn = nullptr;
-        if (hoveredBtn != lastHoveredBtn) {
-          lastHoveredBtn = hoveredBtn;
-          if (hoveredBtn && hoveredBtn != hwnd) {
-            for (size_t i = 0; i < toolbarButtons_.size(); ++i) {
-              if (toolbarButtons_[i].hwnd == hoveredBtn) {
-                TOOLINFOW ti{};
-                ti.cbSize = sizeof(ti);
-                ti.hwnd = hwnd_;
-                ti.uId = reinterpret_cast<UINT_PTR>(hoveredBtn);
-                SendMessageW(toolbarTooltip_, TTM_UPDATETIPTEXTW, 0, reinterpret_cast<LPARAM>(&ti));
-                POINT screenPt = pt;
-                ClientToScreen(hwnd, &screenPt);
-                SendMessageW(toolbarTooltip_, TTM_TRACKPOSITION, 0, MAKELPARAM(screenPt.x + 10, screenPt.y + 20));
-                SendMessageW(toolbarTooltip_, TTM_TRACKACTIVATE, TRUE, reinterpret_cast<LPARAM>(&ti));
-                break;
-              }
-            }
-          } else {
-            TOOLINFOW ti{};
-            ti.cbSize = sizeof(ti);
-            ti.hwnd = hwnd_;
-            ti.uId = 0;
-            SendMessageW(toolbarTooltip_, TTM_TRACKACTIVATE, FALSE, reinterpret_cast<LPARAM>(&ti));
-          }
-        }
-      }
-      break;
-    }
-    case WM_MOUSELEAVE: {
-      static HWND lastHoveredBtn = nullptr;
-      lastHoveredBtn = nullptr;
-      if (toolbarTooltip_) {
-        TOOLINFOW ti{};
-        ti.cbSize = sizeof(ti);
-        ti.hwnd = hwnd_;
-        ti.uId = 0;
-        SendMessageW(toolbarTooltip_, TTM_TRACKACTIVATE, FALSE, reinterpret_cast<LPARAM>(&ti));
-      }
-      break;
-    }
+       if (toolbarTooltip_) {
+         POINT pt{ GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
+         HWND hoveredBtn = ChildWindowFromPoint(hwnd, pt);
+         if (hoveredBtn == hwnd || !hoveredBtn) hoveredBtn = nullptr;
+         if (hoveredBtn != hoveredToolbarBtn_) {
+           if (hoveredToolbarBtn_) {
+             InvalidateRect(hoveredToolbarBtn_, nullptr, FALSE);
+           }
+           if (hoveredBtn) {
+             InvalidateRect(hoveredBtn, nullptr, FALSE);
+           }
+           hoveredToolbarBtn_ = hoveredBtn;
+
+           for (size_t i = 0; i < toolbarButtons_.size(); ++i) {
+             if (toolbarButtons_[i].hwnd == hoveredBtn) {
+               TOOLINFOW ti{};
+               ti.cbSize = sizeof(ti);
+               ti.hwnd = hwnd_;
+               ti.uId = reinterpret_cast<UINT_PTR>(hoveredBtn);
+               SendMessageW(toolbarTooltip_, TTM_UPDATETIPTEXTW, 0, reinterpret_cast<LPARAM>(&ti));
+               POINT screenPt = pt;
+               ClientToScreen(hwnd, &screenPt);
+               SendMessageW(toolbarTooltip_, TTM_TRACKPOSITION, 0, MAKELPARAM(screenPt.x + 10, screenPt.y + 20));
+               SendMessageW(toolbarTooltip_, TTM_TRACKACTIVATE, TRUE, reinterpret_cast<LPARAM>(&ti));
+               break;
+             }
+           }
+           if (!hoveredBtn) {
+             TOOLINFOW ti{};
+             ti.cbSize = sizeof(ti);
+             ti.hwnd = hwnd_;
+             ti.uId = 0;
+             SendMessageW(toolbarTooltip_, TTM_TRACKACTIVATE, FALSE, reinterpret_cast<LPARAM>(&ti));
+           }
+         }
+       }
+       break;
+     }
+     case WM_MOUSELEAVE: {
+       if (hoveredToolbarBtn_) {
+         InvalidateRect(hoveredToolbarBtn_, nullptr, FALSE);
+         hoveredToolbarBtn_ = nullptr;
+       }
+       if (toolbarTooltip_) {
+         TOOLINFOW ti{};
+         ti.cbSize = sizeof(ti);
+         ti.hwnd = hwnd_;
+         ti.uId = 0;
+         SendMessageW(toolbarTooltip_, TTM_TRACKACTIVATE, FALSE, reinterpret_cast<LPARAM>(&ti));
+       }
+       break;
+     }
     case WM_MEASUREITEM:
       if (wp == 1) {
         auto* mi = reinterpret_cast<MEASUREITEMSTRUCT*>(lp);
@@ -1574,25 +1582,44 @@ LRESULT App::HandleListBoxMessage(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
       }
       break;
     }
-    case WM_MOUSEMOVE: {
-      if (itemDrag_.active) {
-        POINT pt{ GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
-        UpdateItemDrag(pt);
-        SetCursor(LoadCursorW(nullptr, itemDrag_.dropAllowed ? IDC_SIZEALL : IDC_NO));
-        return 0;
-      }
-      TRACKMOUSEEVENT tme{};
-      tme.cbSize = sizeof(tme);
-      tme.dwFlags = TME_LEAVE;
-      tme.hwndTrack = hwnd;
-      TrackMouseEvent(&tme);
-      POINT pt{ GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
-      UpdateListTooltip(pt);
-      break;
-    }
-    case WM_MOUSELEAVE:
-      HideListTooltip();
-      break;
+     case WM_MOUSEMOVE: {
+       if (itemDrag_.active) {
+         POINT pt{ GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
+         UpdateItemDrag(pt);
+         SetCursor(LoadCursorW(nullptr, itemDrag_.dropAllowed ? IDC_SIZEALL : IDC_NO));
+         return 0;
+       }
+       TRACKMOUSEEVENT tme{};
+       tme.cbSize = sizeof(tme);
+       tme.dwFlags = TME_LEAVE;
+       tme.hwndTrack = hwnd;
+       TrackMouseEvent(&tme);
+       POINT pt{ GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
+       UpdateListTooltip(pt);
+       {
+         int newHovered = HitTestRow(pt);
+         if (newHovered != hoveredRowIndex_) {
+           if (hoveredRowIndex_ >= 0) {
+             RECT oldRc = GetRowRect(hoveredRowIndex_);
+             InvalidateRect(listBox_, &oldRc, FALSE);
+           }
+           if (newHovered >= 0) {
+             RECT newRc = GetRowRect(newHovered);
+             InvalidateRect(listBox_, &newRc, FALSE);
+           }
+           hoveredRowIndex_ = newHovered;
+         }
+       }
+       break;
+     }
+     case WM_MOUSELEAVE:
+       HideListTooltip();
+       if (hoveredRowIndex_ >= 0) {
+         RECT rc = GetRowRect(hoveredRowIndex_);
+         InvalidateRect(listBox_, &rc, FALSE);
+         hoveredRowIndex_ = -1;
+       }
+       break;
     case WM_LBUTTONUP: {
       HideListTooltip();
       if (suppressNextListButtonUp_) {
@@ -2772,15 +2799,21 @@ void App::DrawListItem(const DRAWITEMSTRUCT* dis) {
   RECT rc = dis->rcItem;
   HFONT oldFont = reinterpret_cast<HFONT>(SelectObject(dc, fontBody_));
 
-  const COLORREF bgColor =
-    row.type == VisibleRow::Type::Group ? RGB(240, 244, 248) :
-    (row.type == VisibleRow::Type::Subdir ? RGB(248, 250, 252) : RGB(255, 255, 255));
-  HBRUSH bg = CreateSolidBrush(bgColor);
-  FillRect(dc, &rc, bg);
-  DeleteObject(bg);
+   const COLORREF bgColor =
+     row.type == VisibleRow::Type::Group ? RGB(240, 244, 248) :
+     (row.type == VisibleRow::Type::Subdir ? RGB(248, 250, 252) : RGB(255, 255, 255));
+   HBRUSH bg = CreateSolidBrush(bgColor);
+   FillRect(dc, &rc, bg);
+   DeleteObject(bg);
 
-  SetBkMode(dc, TRANSPARENT);
-  SetTextColor(dc, RGB(32, 32, 32));
+   if (dis->itemID == hoveredRowIndex_) {
+     HBRUSH hoverBrush = CreateSolidBrush(RGB(220, 232, 250));
+     FillRect(dc, &rc, hoverBrush);
+     DeleteObject(hoverBrush);
+   }
+
+   SetBkMode(dc, TRANSPARENT);
+   SetTextColor(dc, RGB(32, 32, 32));
 
   if (row.type == VisibleRow::Type::GlobalMessage) {
     RECT textRc = rc;
@@ -2957,11 +2990,14 @@ void App::DrawToolbarButton(const DRAWITEMSTRUCT* dis) {
   HDC dc = dis->hDC;
   RECT rc = dis->rcItem;
 
-  const bool selected = (dis->itemState & ODS_SELECTED) != 0;
-  const bool disabled = (dis->itemState & ODS_DISABLED) != 0;
-  const COLORREF bg = selected ? RGB(228, 234, 242) : RGB(245, 247, 250);
-  const COLORREF border = selected ? RGB(120, 132, 148) : RGB(214, 220, 228);
-  const COLORREF iconColor = disabled ? RGB(164, 170, 178) : RGB(52, 76, 112);
+   const bool selected = (dis->itemState & ODS_SELECTED) != 0;
+   const bool disabled = (dis->itemState & ODS_DISABLED) != 0;
+   const bool hovered = dis->hwndItem == hoveredToolbarBtn_;
+   const COLORREF bg = selected ? RGB(228, 234, 242) :
+     (hovered ? RGB(210, 220, 240) : RGB(245, 247, 250));
+   const COLORREF border = selected ? RGB(120, 132, 148) :
+     (hovered ? RGB(80, 100, 160) : RGB(214, 220, 228));
+   const COLORREF iconColor = disabled ? RGB(164, 170, 178) : RGB(52, 76, 112);
 
   HBRUSH bgBrush = CreateSolidBrush(bg);
   FillRect(dc, &rc, bgBrush);
