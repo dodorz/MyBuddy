@@ -1498,3 +1498,9 @@ bool ExecuteActionAndWait(const ActionConfig& action, const NoteGroupConfig& gro
   CloseHandle(processHandle);
   return true;
 }
+
+bool StartActionProcessTracked(const ActionConfig& action, const NoteGroupConfig& group, const NoteFile* file,
+  HANDLE& processHandle, std::wstring* errorMessage, std::wstring* resolvedCommand) {
+  processHandle = nullptr;
+  return StartActionProcess(action, group, file, processHandle, errorMessage, resolvedCommand);
+}

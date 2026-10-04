@@ -135,3 +135,5 @@ bool ExecuteAction(const ActionConfig& action, const NoteGroupConfig& group, con
   std::wstring* errorMessage = nullptr, std::wstring* resolvedCommand = nullptr);
 bool ExecuteActionAndWait(const ActionConfig& action, const NoteGroupConfig& group, const NoteFile* file,
   std::wstring* errorMessage = nullptr, std::wstring* resolvedCommand = nullptr);
+bool StartActionProcessTracked(const ActionConfig& action, const NoteGroupConfig& group, const NoteFile* file,
+  HANDLE& processHandle, std::wstring* errorMessage = nullptr, std::wstring* resolvedCommand = nullptr);

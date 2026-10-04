@@ -335,7 +335,9 @@ Optional keys:
 - Temporary draft filenames use a fixed prefix plus a random suffix.
 - The draft extension uses `createExtension` if configured.
 - Otherwise it falls back to the first writable pattern in that group.
-- The draft is opened with `file_action.Edit`, and MyBuddy waits for that editor process to exit.
+- The draft is opened with `file_action.Edit`, and MyBuddy does not wait for that editor process to exit.
+- The main window stays fully interactive while the editor is open, and multiple editors can be open at the same time.
+- When the editor process exits, MyBuddy inspects the draft and finalizes it.
 - If the draft file was not changed, it is discarded.
 - If the draft file was changed, it is moved into the target group directory and renamed from content.
 - Group context menu can also create a note directly from clipboard text.

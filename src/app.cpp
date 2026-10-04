@@ -1457,6 +1457,7 @@ LRESULT App::HandleMainMessage(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
       }
       if (wp == kAutoRefreshTimerId) {
         PollAutoRefreshWatchers();
+        PollPendingNoteEditors();
         return 0;
       }
       return 0;
@@ -1499,6 +1500,7 @@ LRESULT App::HandleMainMessage(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
       KillTimer(hwnd_, kAutoHideTimerId);
       KillTimer(hwnd_, kAutoRefreshTimerId);
       UnregisterHotKey(hwnd_, kGlobalHotKeyId);
+      DestroyPendingNoteEditors();
       DestroyAutoRefreshWatchers();
       DestroyHotZoneWindow();
       if (singleInstanceMutex_) {
@@ -3510,37 +3512,98 @@ void App::CreateNoteForGroup(int groupIndex) {
   auto dot = draft.stem.find_last_of(L'.');
   if (dot != std::wstring::npos) draft.stem = draft.stem.substr(0, dot);
 
-  FILETIME beforeWrite{};
-  ULONGLONG beforeSize = 0;
-  GetFileSnapshot(draftPath, beforeWrite, beforeSize);
+  PendingNoteEditor editor{};
+  editor.groupId = group.id;
+  editor.draftPath = draftPath;
+  GetFileSnapshot(draftPath, editor.beforeWrite, editor.beforeSize);
 
   std::wstring command;
-  if (!ExecuteActionAndWait(actionIt->second, group, &draft, &errorMessage, &command)) {
+  if (!StartActionProcessTracked(actionIt->second, group, &draft, editor.processHandle, &errorMessage, &command)) {
     DeleteFileW(draftPath.c_str());
     std::wstring message = L"Failed to run action:\n" + actionIt->second.title + L"\n\nCommand:\n" + command + L"\n\n" + errorMessage;
     MessageBoxW(hwnd_, message.c_str(), L"MyBuddy", MB_OK | MB_ICONERROR);
     return;
   }
-
-  FILETIME afterWrite{};
-  ULONGLONG afterSize = 0;
-  bool existsAfter = GetFileSnapshot(draftPath, afterWrite, afterSize);
-  bool changed = existsAfter &&
-    (CompareFileTime(&afterWrite, &beforeWrite) != 0 || afterSize != beforeSize);
-
-  if (!changed) {
-    if (existsAfter) DeleteFileW(draftPath.c_str());
+  if (!editor.processHandle) {
+    DeleteFileW(draftPath.c_str());
+    std::wstring message = L"Failed to run action:\n" + actionIt->second.title +
+      L"\n\nCommand:\n" + command + L"\n\nAction started, but no process handle was returned for watching.";
+    MessageBoxW(hwnd_, message.c_str(), L"MyBuddy", MB_OK | MB_ICONERROR);
     return;
   }
 
+  pendingNoteEditors_.push_back(std::move(editor));
+}
+
+void App::PollPendingNoteEditors() {
+  if (pendingNoteEditors_.empty()) return;
+
+  std::vector<PendingNoteEditor> finished;
+  for (PendingNoteEditor& editor : pendingNoteEditors_) {
+    if (!editor.processHandle) continue;
+    if (WaitForSingleObject(editor.processHandle, 0) == WAIT_TIMEOUT) continue;
+    CloseHandle(editor.processHandle);
+    editor.processHandle = nullptr;
+    finished.push_back(editor);
+  }
+  if (finished.empty()) return;
+
+  pendingNoteEditors_.erase(
+    std::remove_if(pendingNoteEditors_.begin(), pendingNoteEditors_.end(),
+      [](const PendingNoteEditor& editor) { return editor.processHandle == nullptr; }),
+    pendingNoteEditors_.end());
+
+  for (const PendingNoteEditor& editor : finished) {
+    FinishPendingNoteEditor(editor);
+  }
+}
+
+void App::FinishPendingNoteEditor(const PendingNoteEditor& editor) {
+  FILETIME afterWrite{};
+  ULONGLONG afterSize = 0;
+  bool existsAfter = GetFileSnapshot(editor.draftPath, afterWrite, afterSize);
+  bool changed = existsAfter &&
+    (CompareFileTime(&afterWrite, &editor.beforeWrite) != 0 || afterSize != editor.beforeSize);
+
+  if (!changed) {
+    if (existsAfter) DeleteFileW(editor.draftPath.c_str());
+    return;
+  }
+
+  int groupIndex = -1;
+  for (int i = 0; i < static_cast<int>(notesConfig_.groups.size()); ++i) {
+    if (notesConfig_.groups[i].id == editor.groupId) {
+      groupIndex = i;
+      break;
+    }
+  }
+  if (groupIndex < 0 || notesConfig_.groups[groupIndex].type != NoteGroupType::Directory) {
+    std::wstring message = L"Edited note was not saved because its group is no longer configured.\n\nDraft file: " +
+      editor.draftPath;
+    MessageBoxW(hwnd_, message.c_str(), L"MyBuddy", MB_OK | MB_ICONERROR);
+    return;
+  }
+
+  std::wstring errorMessage;
   std::wstring finalPath;
-  if (!MoveTempNoteIntoGroup(group, draftPath, finalPath, &errorMessage)) {
+  if (!MoveTempNoteIntoGroup(notesConfig_.groups[groupIndex], editor.draftPath, finalPath, &errorMessage)) {
     std::wstring message = L"Edited note was not saved into the target group.\n\n" + errorMessage;
     MessageBoxW(hwnd_, message.c_str(), L"MyBuddy", MB_OK | MB_ICONERROR);
     return;
   }
 
   RefreshGroup(groupIndex);
+}
+
+void App::DestroyPendingNoteEditors() {
+  for (PendingNoteEditor& editor : pendingNoteEditors_) {
+    if (editor.processHandle) {
+      CloseHandle(editor.processHandle);
+      editor.processHandle = nullptr;
+    }
+    if (!editor.draftPath.empty()) DeleteFileW(editor.draftPath.c_str());
+  }
+  pendingNoteEditors_.clear();
 }
 
 void App::CreateNoteFromClipboardForGroup(int groupIndex) {

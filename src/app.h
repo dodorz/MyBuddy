@@ -66,6 +66,14 @@ private:
     ULONGLONG dueTick = 0;
   };
 
+  struct PendingNoteEditor {
+    HANDLE processHandle = nullptr;
+    std::wstring groupId;
+    std::wstring draftPath;
+    FILETIME beforeWrite{};
+    ULONGLONG beforeSize = 0;
+  };
+
   struct SubdirEntry {
     std::wstring path;
     std::wstring name;
@@ -172,6 +180,9 @@ private:
   void OpenGroupNote(int groupIndex);
   void OpenConfigFile();
   void CreateNoteForGroup(int groupIndex);
+  void PollPendingNoteEditors();
+  void FinishPendingNoteEditor(const PendingNoteEditor& editor);
+  void DestroyPendingNoteEditors();
   void CreateNoteFromClipboardForGroup(int groupIndex);
   void OpenFileNote(int groupIndex, int subdirIndex, int fileIndex);
   void DeleteFileNote(int groupIndex, int subdirIndex, int fileIndex);
@@ -234,4 +245,5 @@ private:
    ItemDrag itemDrag_{};
    bool suppressNextListButtonUp_ = false;
    std::vector<AutoRefreshWatcher> autoRefreshWatchers_{};
+  std::vector<PendingNoteEditor> pendingNoteEditors_{};
 };
