@@ -24,9 +24,119 @@ Section name: `[app]`
 Supported keys:
 
 - `globalHotKey`
-  - Global hotkey used to show the window
+  - Legacy global hotkey used to show the window
   - Default: `Ctrl+Alt+B`
-  - Simple supported forms: `Ctrl+Alt+B`, `Ctrl+Shift+1`, `Alt+F6`
+  - Same key syntax as `[hotkey.<id>]` `key`
+  - If a `[hotkey.<id>]` binding uses the same key, that binding takes precedence and the legacy entry is skipped
+- `defaultGroup`
+  - Optional fallback group id for `group.addNote`, `group.addFromClipboard`, `group.action`, and `file.action` when `group=` is omitted
+  - Default: empty
+
+## Hotkey Sections
+
+Section format: `[hotkey.<id>]`
+
+Each section defines one global shortcut. The `<id>` is only used for diagnostics and uniqueness; it does not affect behavior.
+
+Supported keys:
+
+- `key`
+  - Required
+  - Hotkey text such as `Ctrl+Alt+N`, `Ctrl+Shift+1`, or `Alt+F6`
+  - At least one modifier is required: `Ctrl`, `Alt`, `Shift`, or `Win`
+  - Modifier aliases: `Control`, `Windows`, `Meta`
+  - Named non-modifier keys: `F1`-`F24`, `Space`, `Tab`, `Enter`, `Esc`, `Backspace`, `Delete`, `Insert`, `Home`, `End`, `PageUp`, `PageDown`, `Up`, `Down`, `Left`, `Right`, `Minus`, `Equal`, `Comma`, `Period`, `Slash`, `Semicolon`, `Quote`, `Backslash`, `LBracket`, `RBracket`, `Backtick`
+  - Single letters and digits are supported
+  - The `+` key itself is not directly expressible because `+` separates parts; use `Shift+Equal` or another key
+- `command`
+  - Required
+  - One of the commands listed below
+- `group`
+  - Group id, not group title
+  - Used by group commands and `file.action` when using `item=`
+- `action`
+  - Action id from `[action.<id>]`
+  - Required by `group.action`, `file.action`, and `current.action`
+- `file`
+  - Absolute file path for `file.action`
+- `item`
+  - Optional file name, stem, or full path inside `group=` for `file.action`
+- `wait`
+  - `1` or `0`
+  - Default: `0`
+  - When `1`, actions that support waiting use the blocking execution path and refresh the group afterward
+  - Hotkey actions default to non-blocking execution so the main window does not freeze while an editor is open
+
+Supported commands:
+
+- `window.toggle`
+  - Show and activate the main window
+- `window.show`
+  - Same as `window.toggle`
+- `config.reload`
+  - Reload `config.ini` and refresh notes
+- `config.open`
+  - Open `config.ini` with the configured `Edit` action
+- `group.toggle`
+  - Expand or collapse a group
+- `group.addNote`
+  - Create a new note in a directory group
+- `group.addFromClipboard`
+  - Create a new note from clipboard text in a directory group
+- `group.action`
+  - Run an action in group context
+  - Directory actions receive `{group_dir}` etc.
+  - For `textgroup` and `todogroup`, file-target actions receive the source file when it exists
+- `file.action`
+  - Run an action for one explicit file
+  - Target is selected with `file=`, or with `group=` and `item=`
+- `current.action`
+  - Run an action for the current selected row
+  - File row: file context
+  - Group or subdirectory row: group context
+  - If no row is selected, the command reports an error; it does not guess a target
+
+Examples:
+
+```ini
+[app]
+globalHotKey=Ctrl+Alt+B
+defaultGroup=inbox
+
+[hotkey.inboxNew]
+key=Ctrl+Alt+N
+command=group.addNote
+group=inbox
+
+[hotkey.inboxClipboard]
+key=Ctrl+Alt+V
+command=group.addFromClipboard
+group=inbox
+
+[hotkey.workTerminal]
+key=Ctrl+Alt+T
+command=group.action
+group=work
+action=Terminal
+
+[hotkey.dailyEdit]
+key=Ctrl+Alt+D
+command=file.action
+file=D:\Notes\Work\daily.md
+action=Edit
+
+[hotkey.revealCurrent]
+key=Ctrl+Alt+R
+command=current.action
+action=Reveal
+```
+
+Notes:
+
+- Hotkeys are system-wide while MyBuddy is running.
+- Duplicate hotkeys and keys already owned by another program are reported through the tray notification area; other bindings still register.
+- `MOD_NOREPEAT` is used so holding a hotkey does not repeatedly trigger the command.
+- `Ctrl+Alt` is equivalent to AltGr on some keyboard layouts; prefer `Ctrl+Shift`, `Ctrl+Alt+Shift`, or `Win+Shift` combinations if typing special characters is affected.
 
 ## Toolbar Section
 
@@ -407,3 +517,4 @@ Supported placeholders:
 - Click file item runs `defaultFileAction`
 - Right-click group header shows group menu
 - Right-click file item shows file menu
+- `[hotkey.*]` sections bind system-wide shortcuts to window, group, file, and current-selection commands

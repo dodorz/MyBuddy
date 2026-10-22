@@ -10,11 +10,16 @@
 #include <windowsx.h>
 
 #include <algorithm>
+#include <set>
+
+#ifndef MOD_NOREPEAT
+#define MOD_NOREPEAT 0x4000
+#endif
 
 namespace {
 constexpr UINT kTrayMsg = WM_APP + 1;
 constexpr UINT kSingleInstanceShowMsg = WM_APP + 2;
-constexpr int kGlobalHotKeyId = 0xB001;
+constexpr UINT kHotKeyBaseId = 0xB100;
 constexpr UINT kAutoHideTimerId = 5001;
 constexpr UINT kAnimationTimerId = 5002;
 constexpr UINT kAutoRefreshTimerId = 5003;
@@ -122,6 +127,72 @@ bool TryParseFunctionKey(const std::wstring& token, UINT& vk) {
   return true;
 }
 
+bool TryParseNamedKey(const std::wstring& token, UINT& vk) {
+  struct NamedKey {
+    const wchar_t* name;
+    UINT vk;
+  };
+  static const NamedKey keys[] = {
+    {L"SPACE", VK_SPACE},
+    {L"TAB", VK_TAB},
+    {L"ENTER", VK_RETURN},
+    {L"RETURN", VK_RETURN},
+    {L"ESC", VK_ESCAPE},
+    {L"ESCAPE", VK_ESCAPE},
+    {L"BACKSPACE", VK_BACK},
+    {L"BACK", VK_BACK},
+    {L"DELETE", VK_DELETE},
+    {L"DEL", VK_DELETE},
+    {L"INSERT", VK_INSERT},
+    {L"INS", VK_INSERT},
+    {L"HOME", VK_HOME},
+    {L"END", VK_END},
+    {L"PAGEUP", VK_PRIOR},
+    {L"PGUP", VK_PRIOR},
+    {L"PAGEDOWN", VK_NEXT},
+    {L"PGDN", VK_NEXT},
+    {L"UP", VK_UP},
+    {L"DOWN", VK_DOWN},
+    {L"LEFT", VK_LEFT},
+    {L"RIGHT", VK_RIGHT},
+    {L"MINUS", VK_OEM_MINUS},
+    {L"EQUAL", VK_OEM_PLUS},
+    {L"COMMA", VK_OEM_COMMA},
+    {L"PERIOD", VK_OEM_PERIOD},
+    {L"SLASH", VK_OEM_2},
+    {L"SEMICOLON", VK_OEM_1},
+    {L"QUOTE", VK_OEM_7},
+    {L"BACKSLASH", VK_OEM_5},
+    {L"LBRACKET", VK_OEM_4},
+    {L"RBRACKET", VK_OEM_6},
+    {L"BACKTICK", VK_OEM_3},
+  };
+  for (const NamedKey& key : keys) {
+    if (token == key.name) {
+      vk = key.vk;
+      return true;
+    }
+  }
+  return false;
+}
+
+App::HotKeyCommand ParseHotKeyCommand(const std::wstring& name, bool& ok) {
+  const std::wstring normalized = ToLower(Trim(name));
+  ok = true;
+  if (normalized == L"window.toggle") return App::HotKeyCommand::WindowToggle;
+  if (normalized == L"window.show") return App::HotKeyCommand::WindowShow;
+  if (normalized == L"config.reload") return App::HotKeyCommand::ConfigReload;
+  if (normalized == L"config.open") return App::HotKeyCommand::ConfigOpen;
+  if (normalized == L"group.toggle") return App::HotKeyCommand::GroupToggle;
+  if (normalized == L"group.addnote") return App::HotKeyCommand::GroupAddNote;
+  if (normalized == L"group.addfromclipboard") return App::HotKeyCommand::GroupAddFromClipboard;
+  if (normalized == L"group.action") return App::HotKeyCommand::GroupAction;
+  if (normalized == L"file.action") return App::HotKeyCommand::FileAction;
+  if (normalized == L"current.action") return App::HotKeyCommand::CurrentAction;
+  ok = false;
+  return App::HotKeyCommand::WindowToggle;
+}
+
 bool ParseHotKeySpec(const std::wstring& spec, UINT& modifiers, UINT& vk) {
   modifiers = 0;
   vk = 0;
@@ -154,8 +225,7 @@ bool ParseHotKeySpec(const std::wstring& spec, UINT& modifiers, UINT& vk) {
         parsedVk = static_cast<UINT>(ch);
       }
     } else if (TryParseFunctionKey(part, parsedVk)) {
-    } else if (part == L"SPACE") {
-      parsedVk = VK_SPACE;
+    } else if (TryParseNamedKey(part, parsedVk)) {
     }
 
     if (parsedVk == 0 || vk != 0) return false;
@@ -894,6 +964,23 @@ bool BuildGroupSourceFile(const NoteGroupConfig& group, NoteFile& file) {
   return true;
 }
 
+bool BuildNoteFileFromPath(const std::wstring& path, NoteFile& file) {
+  if (path.empty()) return false;
+  WIN32_FILE_ATTRIBUTE_DATA data{};
+  if (!GetFileAttributesExW(path.c_str(), GetFileExInfoStandard, &data)) return false;
+  if ((data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0) return false;
+  file = NoteFile{};
+  file.path = path;
+  const size_t pos = path.find_last_of(L"\\/");
+  file.dir = pos == std::wstring::npos ? L"" : path.substr(0, pos);
+  file.name = GetFileNameFromPath(path);
+  file.stem = GetFileStemFromName(file.name);
+  file.displayName = file.name;
+  file.createdTime = data.ftCreationTime;
+  file.modifiedTime = data.ftLastWriteTime;
+  return true;
+}
+
 bool MovePathToRecycleBin(const std::wstring& path, std::wstring* errorMessage) {
   if (path.empty()) {
     if (errorMessage) *errorMessage = L"Path is empty.";
@@ -949,6 +1036,18 @@ void UpdateTrayIconTip(HWND hwnd, const wchar_t* tip) {
   nid.uID = kTrayIconId;
   nid.uFlags = NIF_TIP;
   wcscpy_s(nid.szTip, tip);
+  Shell_NotifyIconW(NIM_MODIFY, &nid);
+}
+
+void ShowTrayBalloon(HWND hwnd, const wchar_t* title, const wchar_t* message, DWORD flags) {
+  NOTIFYICONDATAW nid{};
+  nid.cbSize = sizeof(nid);
+  nid.hWnd = hwnd;
+  nid.uID = kTrayIconId;
+  nid.uFlags = NIF_INFO;
+  nid.dwInfoFlags = flags;
+  wcsncpy_s(nid.szInfoTitle, title ? title : L"", _TRUNCATE);
+  wcsncpy_s(nid.szInfo, message ? message : L"", _TRUNCATE);
   Shell_NotifyIconW(NIM_MODIFY, &nid);
 }
 
@@ -1272,7 +1371,9 @@ int App::Run(HINSTANCE instance, int showCmd) {
   SendMessageW(hwnd_, WM_SETICON, ICON_SMALL, reinterpret_cast<LPARAM>(wc.hIconSm));
 
   AddTrayIcon(hwnd_);
+  trayIconAdded_ = true;
   UpdateTrayIconTip(hwnd_, title.c_str());
+  NotifyHotKeyWarnings();
   ShowWindow(hwnd_, showCmd);
   UpdateWindow(hwnd_);
 
@@ -1319,7 +1420,7 @@ LRESULT App::HandleMainMessage(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
       if (!stateLoaded_) {
         InitializeDefaultState();
       }
-      RegisterHotKey(hwnd_, kGlobalHotKeyId, hotKeyModifiers_, hotKeyVk_);
+      ApplyHotKeys();
       CreateHotZoneWindow();
       CreateFonts();
       CreateControls();
@@ -1420,32 +1521,25 @@ LRESULT App::HandleMainMessage(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                  HIWORD(wp) == BN_CLICKED) {
         RunToolbarButton(LOWORD(wp) - kToolbarButtonBaseId);
       } else if (LOWORD(wp) == kTrayOpenCmd) {
-        if (IsDocked()) {
-          RequestExpand(true);
-        } else {
-          ShowMainWindow(true);
-        }
+        ActivateMainWindow();
       } else if (LOWORD(wp) == kTrayExitCmd) {
         ExitFromTray();
       }
       return 0;
     case kSingleInstanceShowMsg:
-      if (IsDocked()) {
-        RequestExpand(true);
-      } else {
-        ShowMainWindow(true);
-      }
+      ActivateMainWindow();
       return 0;
-    case WM_HOTKEY:
-      if (wp == kGlobalHotKeyId) {
-        if (IsDocked()) {
-          RequestExpand(true);
-        } else {
-          ShowMainWindow(true);
+    case WM_HOTKEY: {
+      const UINT id = static_cast<UINT>(wp);
+      if (id >= kHotKeyBaseId) {
+        const size_t index = static_cast<size_t>(id - kHotKeyBaseId);
+        if (index < hotKeys_.size()) {
+          ExecuteHotKeyCommand(hotKeys_[index]);
+          return 0;
         }
-        return 0;
       }
       break;
+    }
     case WM_TIMER:
       if (wp == kAnimationTimerId) {
         TickAnimation();
@@ -1499,7 +1593,7 @@ LRESULT App::HandleMainMessage(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
       KillTimer(hwnd_, kAnimationTimerId);
       KillTimer(hwnd_, kAutoHideTimerId);
       KillTimer(hwnd_, kAutoRefreshTimerId);
-      UnregisterHotKey(hwnd_, kGlobalHotKeyId);
+      UnregisterHotKeys();
       DestroyPendingNoteEditors();
       DestroyAutoRefreshWatchers();
       DestroyHotZoneWindow();
@@ -1515,11 +1609,7 @@ LRESULT App::HandleMainMessage(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     default:
       if (msg == kTrayMsg) {
         if (LOWORD(lp) == WM_LBUTTONUP || LOWORD(lp) == WM_LBUTTONDBLCLK) {
-          if (IsDocked()) {
-            RequestExpand(true);
-          } else {
-            ShowMainWindow(true);
-          }
+          ActivateMainWindow();
         } else if (LOWORD(lp) == WM_RBUTTONUP) {
           POINT pt{};
           GetCursorPos(&pt);
@@ -1656,6 +1746,8 @@ LRESULT App::HandleListBoxMessage(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 }
 
 bool App::LoadConfig() {
+  // Release the old bindings before replacing hotKeys_ with the new config.
+  UnregisterHotKeys();
   const std::wstring programPath = GetProgramConfigPath();
   const std::wstring fallbackPath = GetFallbackConfigPath();
   std::wstring path = programPath;
@@ -1665,17 +1757,87 @@ bool App::LoadConfig() {
   currentConfigPath_ = path;
 
   IniFile ini;
+  hotKeys_.clear();
+  hotKeyWarnings_.clear();
+  defaultGroupId_.clear();
+  auto addDefaultWindowHotKey = [this]() {
+    HotKeyBinding binding{};
+    binding.id = L"globalHotKey";
+    binding.keySpec = L"Ctrl+Alt+B";
+    binding.modifiers = MOD_CONTROL | MOD_ALT;
+    binding.vk = 'B';
+    binding.command = HotKeyCommand::WindowToggle;
+    hotKeys_.push_back(std::move(binding));
+  };
   if (!ini.LoadUtf8(path)) {
     toolbarButtons_.clear();
     notesConfig_ = NotesConfig{};
+    addDefaultWindowHotKey();
     return false;
   }
 
-  hotKeySpec_ = ini.GetString(L"app", L"globalHotKey", L"Ctrl+Alt+B");
-  if (!ParseHotKeySpec(hotKeySpec_, hotKeyModifiers_, hotKeyVk_)) {
-    hotKeySpec_ = L"Ctrl+Alt+B";
-    hotKeyModifiers_ = MOD_CONTROL | MOD_ALT;
-    hotKeyVk_ = 'B';
+  defaultGroupId_ = Trim(ini.GetString(L"app", L"defaultGroup"));
+
+  for (const std::wstring& section : ini.GetSectionNames()) {
+    if (ToLower(section).rfind(L"hotkey.", 0) != 0 || section.size() <= 7) continue;
+
+    HotKeyBinding binding{};
+    binding.id = section.substr(7);
+    binding.keySpec = Trim(ini.GetString(section, L"key"));
+    if (binding.keySpec.empty()) {
+      hotKeyWarnings_.push_back(L"[hotkey." + binding.id + L"] requires key=.");
+      continue;
+    }
+    if (!ParseHotKeySpec(binding.keySpec, binding.modifiers, binding.vk)) {
+      hotKeyWarnings_.push_back(L"[hotkey." + binding.id + L"] has an invalid key: " + binding.keySpec);
+      continue;
+    }
+
+    const std::wstring commandName = ini.GetString(section, L"command");
+    bool commandOk = false;
+    binding.command = ParseHotKeyCommand(commandName, commandOk);
+    if (!commandOk) {
+      hotKeyWarnings_.push_back(L"[hotkey." + binding.id + L"] has an unknown command: " + commandName);
+      continue;
+    }
+
+    binding.groupId = Trim(ini.GetString(section, L"group"));
+    binding.actionId = Trim(ini.GetString(section, L"action"));
+    binding.filePath = Trim(ini.GetString(section, L"file"));
+    binding.itemName = Trim(ini.GetString(section, L"item"));
+    binding.wait = ini.GetBool(section, L"wait", false);
+
+    if ((binding.command == HotKeyCommand::GroupAction ||
+         binding.command == HotKeyCommand::FileAction ||
+         binding.command == HotKeyCommand::CurrentAction) && binding.actionId.empty()) {
+      hotKeyWarnings_.push_back(L"[hotkey." + binding.id + L"] requires action=.");
+      continue;
+    }
+    const std::wstring effectiveGroupId = binding.groupId.empty() ? defaultGroupId_ : binding.groupId;
+    if (binding.command == HotKeyCommand::FileAction && binding.filePath.empty() &&
+        (effectiveGroupId.empty() || binding.itemName.empty())) {
+      hotKeyWarnings_.push_back(L"[hotkey." + binding.id + L"] requires file=, or group= and item=.");
+      continue;
+    }
+    hotKeys_.push_back(std::move(binding));
+  }
+
+  HotKeyBinding legacy{};
+  legacy.id = L"globalHotKey";
+  legacy.keySpec = Trim(ini.GetString(L"app", L"globalHotKey", L"Ctrl+Alt+B"));
+  legacy.command = HotKeyCommand::WindowToggle;
+  if (!ParseHotKeySpec(legacy.keySpec, legacy.modifiers, legacy.vk)) {
+    hotKeyWarnings_.push_back(L"[app] globalHotKey has an invalid key: " + legacy.keySpec);
+    legacy.keySpec = L"Ctrl+Alt+B";
+    legacy.modifiers = MOD_CONTROL | MOD_ALT;
+    legacy.vk = 'B';
+  }
+  const bool legacyOverridden = std::any_of(hotKeys_.begin(), hotKeys_.end(),
+    [&](const HotKeyBinding& binding) {
+      return binding.modifiers == legacy.modifiers && binding.vk == legacy.vk;
+    });
+  if (!legacyOverridden) {
+    hotKeys_.push_back(std::move(legacy));
   }
 
   std::vector<ToolbarButtonConfig> loadedToolbarButtons;
@@ -1757,6 +1919,7 @@ void App::ShowToTray() {
 
 void App::ExitFromTray() {
   RemoveTrayIcon(hwnd_);
+  trayIconAdded_ = false;
   SaveState();
   DestroyWindow(hwnd_);
 }
@@ -1776,6 +1939,14 @@ void App::ShowMainWindow(bool activate) {
 
 void App::HideMainWindow() {
   ShowWindow(hwnd_, SW_HIDE);
+}
+
+void App::ActivateMainWindow() {
+  if (IsDocked()) {
+    RequestExpand(true);
+  } else {
+    ShowMainWindow(true);
+  }
 }
 
 void App::CreateHotZoneWindow() {
@@ -2536,6 +2707,7 @@ void App::ReloadConfigAndRefreshNotes() {
   }
 
   LoadConfig();
+  ApplyHotKeys();
   RefreshNotes(&expandedStateByGroupId);
 }
 
@@ -3149,6 +3321,344 @@ void App::RunToolbarButton(size_t index) {
 
   if (shouldWait && groupIndex >= 0) {
     RefreshGroup(groupIndex);
+  }
+}
+
+void App::UnregisterHotKeys() {
+  if (!hwnd_) return;
+  for (HotKeyBinding& binding : hotKeys_) {
+    if (!binding.registered) continue;
+    UnregisterHotKey(hwnd_, binding.winId);
+    binding.registered = false;
+  }
+}
+
+void App::ApplyHotKeys() {
+  UnregisterHotKeys();
+  if (!hwnd_) return;
+
+  auto labelFor = [](const HotKeyBinding& binding) {
+    return binding.id == L"globalHotKey"
+      ? std::wstring(L"[app] globalHotKey")
+      : L"[hotkey." + binding.id + L"]";
+  };
+
+  std::set<std::pair<UINT, UINT>> seen;
+  for (size_t i = 0; i < hotKeys_.size(); ++i) {
+    HotKeyBinding& binding = hotKeys_[i];
+    binding.winId = kHotKeyBaseId + static_cast<UINT>(i);
+    binding.registered = false;
+
+    if (!seen.insert({binding.modifiers, binding.vk}).second) {
+      hotKeyWarnings_.push_back(labelFor(binding) + L" duplicate hotkey: " + binding.keySpec);
+      continue;
+    }
+    if (!RegisterHotKey(hwnd_, binding.winId, binding.modifiers | MOD_NOREPEAT, binding.vk)) {
+      const DWORD error = GetLastError();
+      std::wstring message = labelFor(binding) + L" failed to register " + binding.keySpec;
+      if (error == ERROR_HOTKEY_ALREADY_REGISTERED) {
+        message += L": already used by another program.";
+      } else {
+        message += L": Windows error " + std::to_wstring(error) + L".";
+      }
+      hotKeyWarnings_.push_back(std::move(message));
+      continue;
+    }
+    binding.registered = true;
+  }
+
+  NotifyHotKeyWarnings();
+}
+
+void App::NotifyHotKeyWarnings() {
+  if (hotKeyWarnings_.empty()) {
+    lastHotKeyWarningText_.clear();
+    return;
+  }
+
+  std::wstring summary;
+  for (const std::wstring& warning : hotKeyWarnings_) {
+    if (!summary.empty()) summary += L"\n";
+    summary += warning;
+  }
+  if (summary == lastHotKeyWarningText_) return;
+  OutputDebugStringW((summary + L"\n").c_str());
+  if (trayIconAdded_ && hwnd_) {
+    lastHotKeyWarningText_ = summary;
+    ShowTrayBalloon(hwnd_, L"MyBuddy hotkeys", summary.c_str(), NIIF_WARNING);
+  }
+}
+
+void App::ShowHotKeyError(const std::wstring& message) {
+  if (trayIconAdded_ && (trayHidden_ || IsIconic(hwnd_) || !IsWindowVisible(hwnd_))) {
+    ShowTrayBalloon(hwnd_, L"MyBuddy", message.c_str(), NIIF_ERROR);
+    return;
+  }
+  MessageBoxW(hwnd_, message.c_str(), L"MyBuddy", MB_OK | MB_ICONERROR);
+}
+
+int App::FindGroupIndexById(const std::wstring& id) const {
+  if (id.empty()) return -1;
+  for (int i = 0; i < static_cast<int>(notesConfig_.groups.size()); ++i) {
+    if (_wcsicmp(notesConfig_.groups[i].id.c_str(), id.c_str()) == 0) return i;
+  }
+  return -1;
+}
+
+int App::ResolveHotKeyGroupIndex(const HotKeyBinding& binding) const {
+  const std::wstring groupId = binding.groupId.empty() ? defaultGroupId_ : binding.groupId;
+  if (!groupId.empty()) return FindGroupIndexById(groupId);
+
+  const int rowIndex = GetCurrentRowIndex();
+  if (rowIndex >= 0 && rowIndex < static_cast<int>(visibleRows_.size())) {
+    const int groupIndex = visibleRows_[rowIndex].groupIndex;
+    if (groupIndex >= 0 && groupIndex < static_cast<int>(notesConfig_.groups.size())) return groupIndex;
+  }
+  return -1;
+}
+
+bool App::FindFileInGroup(int groupIndex, const std::wstring& item, NoteFile& file) const {
+  if (groupIndex < 0 || groupIndex >= static_cast<int>(notesConfig_.groups.size()) || item.empty()) return false;
+  const NoteGroupConfig& group = notesConfig_.groups[groupIndex];
+
+  auto matches = [&](const NoteFile& candidate) {
+    return _wcsicmp(candidate.name.c_str(), item.c_str()) == 0 ||
+      _wcsicmp(candidate.stem.c_str(), item.c_str()) == 0 ||
+      _wcsicmp(candidate.path.c_str(), item.c_str()) == 0;
+  };
+
+  if (IsSingleFileLineGroupType(group.type)) {
+    NoteFile sourceFile{};
+    if (BuildGroupSourceFile(group, sourceFile) && matches(sourceFile)) {
+      file = sourceFile;
+      return true;
+    }
+  }
+
+  if (groupIndex < static_cast<int>(notesByGroup_.size())) {
+    for (const NoteFile& candidate : notesByGroup_[groupIndex]) {
+      if (!matches(candidate)) continue;
+      file = candidate;
+      return true;
+    }
+  }
+  if (groupIndex < static_cast<int>(subdirsByGroup_.size())) {
+    for (const SubdirEntry& subdir : subdirsByGroup_[groupIndex]) {
+      for (const NoteFile& candidate : subdir.files) {
+        if (!matches(candidate)) continue;
+        file = candidate;
+        return true;
+      }
+    }
+  }
+
+  if (group.type == NoteGroupType::Directory) {
+    std::vector<NoteFile> allFiles;
+    LoadNoteFiles(group, allFiles, nullptr, true);
+    for (const NoteFile& candidate : allFiles) {
+      if (!matches(candidate)) continue;
+      file = candidate;
+      return true;
+    }
+  }
+  return false;
+}
+
+bool App::ResolveHotKeyFile(const HotKeyBinding& binding, int& groupIndex, NoteGroupConfig& group, NoteFile& file) const {
+  groupIndex = -1;
+  group = NoteGroupConfig{};
+  file = NoteFile{};
+
+  if (!binding.filePath.empty()) {
+    if (!BuildNoteFileFromPath(binding.filePath, file)) return false;
+
+    if (!binding.groupId.empty()) {
+      groupIndex = FindGroupIndexById(binding.groupId);
+      if (groupIndex < 0) return false;
+    } else {
+      for (int i = 0; i < static_cast<int>(notesConfig_.groups.size()); ++i) {
+        const NoteGroupConfig& candidate = notesConfig_.groups[i];
+        if (candidate.type == NoteGroupType::Directory && _wcsicmp(candidate.path.c_str(), file.dir.c_str()) == 0) {
+          groupIndex = i;
+          break;
+        }
+        if (IsSingleFileLineGroupType(candidate.type) && _wcsicmp(candidate.path.c_str(), file.path.c_str()) == 0) {
+          groupIndex = i;
+          break;
+        }
+      }
+    }
+
+    if (groupIndex >= 0) {
+      group = notesConfig_.groups[groupIndex];
+    } else {
+      group.path = file.dir;
+    }
+    return true;
+  }
+
+  const std::wstring groupId = binding.groupId.empty() ? defaultGroupId_ : binding.groupId;
+  if (groupId.empty() || binding.itemName.empty()) return false;
+  groupIndex = FindGroupIndexById(groupId);
+  if (groupIndex < 0) return false;
+  group = notesConfig_.groups[groupIndex];
+  return FindFileInGroup(groupIndex, binding.itemName, file);
+}
+
+void App::RunActionById(const std::wstring& actionId, int groupIndex, const NoteFile* file, bool wait) {
+  if (actionId.empty()) {
+    ShowHotKeyError(L"Hotkey command requires action=.");
+    return;
+  }
+
+  auto actionIt = notesConfig_.actions.find(actionId);
+  if (actionIt == notesConfig_.actions.end()) {
+    ShowHotKeyError(L"Unknown action: " + actionId);
+    return;
+  }
+  if (!IsActionTargetCompatible(actionIt->second, file)) {
+    ShowHotKeyError(L"Action \"" + actionIt->second.title + L"\" cannot run for this target.");
+    return;
+  }
+
+  NoteGroupConfig group{};
+  if (groupIndex >= 0 && groupIndex < static_cast<int>(notesConfig_.groups.size())) {
+    group = notesConfig_.groups[groupIndex];
+  } else if (file) {
+    group.path = file->dir;
+  }
+
+  std::wstring errorMessage;
+  std::wstring command;
+  const bool ok = wait
+    ? ExecuteActionAndWait(actionIt->second, group, file, &errorMessage, &command)
+    : ExecuteAction(actionIt->second, group, file, &errorMessage, &command);
+  if (!ok) {
+    ShowHotKeyError(L"Failed to run action:\n" + actionIt->second.title +
+      L"\n\nCommand:\n" + command + L"\n\n" + errorMessage);
+    return;
+  }
+
+  if (wait && groupIndex >= 0) {
+    RefreshGroup(groupIndex);
+  }
+}
+
+void App::ExecuteHotKeyCommand(HotKeyBinding binding) {
+  if (hotKeyBusy_) return;
+  hotKeyBusy_ = true;
+  struct BusyGuard {
+    bool& flag;
+    ~BusyGuard() { flag = false; }
+  } guard{hotKeyBusy_};
+
+  switch (binding.command) {
+    case HotKeyCommand::WindowToggle:
+    case HotKeyCommand::WindowShow:
+      ActivateMainWindow();
+      return;
+
+    case HotKeyCommand::ConfigReload:
+      ReloadConfigAndRefreshNotes();
+      return;
+
+    case HotKeyCommand::ConfigOpen:
+      OpenConfigFile();
+      return;
+
+    case HotKeyCommand::GroupToggle: {
+      const int groupIndex = ResolveHotKeyGroupIndex(binding);
+      if (groupIndex < 0) {
+        ShowHotKeyError(L"Hotkey group was not found. Set group= to a valid group id.");
+        return;
+      }
+      ToggleGroup(groupIndex);
+      return;
+    }
+
+    case HotKeyCommand::GroupAddNote:
+    case HotKeyCommand::GroupAddFromClipboard: {
+      const int groupIndex = ResolveHotKeyGroupIndex(binding);
+      if (groupIndex < 0) {
+        ShowHotKeyError(L"Hotkey group was not found. Set group= to a valid group id.");
+        return;
+      }
+      if (notesConfig_.groups[groupIndex].type != NoteGroupType::Directory) {
+        ShowHotKeyError(L"New notes are only supported by directory groups.");
+        return;
+      }
+      if (binding.command == HotKeyCommand::GroupAddNote) {
+        CreateNoteForGroup(groupIndex);
+      } else {
+        CreateNoteFromClipboardForGroup(groupIndex);
+      }
+      return;
+    }
+
+    case HotKeyCommand::GroupAction:
+    case HotKeyCommand::CurrentAction: {
+      int groupIndex = -1;
+      const NoteFile* filePtr = nullptr;
+      NoteFile file{};
+
+      if (binding.command == HotKeyCommand::GroupAction) {
+        groupIndex = ResolveHotKeyGroupIndex(binding);
+        if (groupIndex < 0) {
+          ShowHotKeyError(L"Hotkey group was not found. Set group= to a valid group id.");
+          return;
+        }
+      } else {
+        const int rowIndex = GetCurrentRowIndex();
+        if (rowIndex < 0 || rowIndex >= static_cast<int>(visibleRows_.size())) {
+          ActivateMainWindow();
+          ShowHotKeyError(L"No current note item is selected.");
+          return;
+        }
+        const VisibleRow& row = visibleRows_[rowIndex];
+        if (row.type == VisibleRow::Type::GlobalMessage) {
+          ActivateMainWindow();
+          ShowHotKeyError(L"No current note item is selected.");
+          return;
+        }
+        groupIndex = row.groupIndex;
+        if (groupIndex < 0 || groupIndex >= static_cast<int>(notesConfig_.groups.size())) {
+          ActivateMainWindow();
+          ShowHotKeyError(L"No current note group is selected.");
+          return;
+        }
+        if (row.type == VisibleRow::Type::File) {
+          const NoteFile* selectedFile = GetVisibleRowFile(row);
+          if (!selectedFile) {
+            ShowHotKeyError(L"The selected note file is no longer available.");
+            return;
+          }
+          file = *selectedFile;
+          filePtr = &file;
+        }
+      }
+
+      const NoteGroupConfig& group = notesConfig_.groups[groupIndex];
+      auto actionIt = notesConfig_.actions.find(binding.actionId);
+      if (!filePtr && actionIt != notesConfig_.actions.end() && IsSingleFileLineGroupType(group.type)) {
+        if (BuildGroupSourceFile(group, file) && IsActionTargetCompatible(actionIt->second, &file)) {
+          filePtr = &file;
+        }
+      }
+      RunActionById(binding.actionId, groupIndex, filePtr, binding.wait);
+      return;
+    }
+
+    case HotKeyCommand::FileAction: {
+      int groupIndex = -1;
+      NoteGroupConfig group{};
+      NoteFile file{};
+      if (!ResolveHotKeyFile(binding, groupIndex, group, file)) {
+        ShowHotKeyError(L"Hotkey file target was not found. Check file= or group= and item=.");
+        return;
+      }
+      RunActionById(binding.actionId, groupIndex, &file, binding.wait);
+      return;
+    }
   }
 }
 

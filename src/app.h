@@ -36,6 +36,34 @@ public:
     HWND hwnd = nullptr;
   };
 
+  enum class HotKeyCommand {
+    WindowToggle,
+    WindowShow,
+    ConfigReload,
+    ConfigOpen,
+    GroupToggle,
+    GroupAddNote,
+    GroupAddFromClipboard,
+    GroupAction,
+    FileAction,
+    CurrentAction,
+  };
+
+  struct HotKeyBinding {
+    std::wstring id;
+    std::wstring keySpec;
+    UINT modifiers = 0;
+    UINT vk = 0;
+    HotKeyCommand command = HotKeyCommand::WindowToggle;
+    std::wstring groupId;
+    std::wstring actionId;
+    std::wstring filePath;
+    std::wstring itemName;
+    bool wait = false;
+    UINT winId = 0;
+    bool registered = false;
+  };
+
   int Run(HINSTANCE instance, int showCmd);
 
 private:
@@ -110,6 +138,7 @@ private:
   void ShowTrayMenu(POINT pt);
   void ShowMainWindow(bool activate = true);
   void HideMainWindow();
+  void ActivateMainWindow();
   void ApplySavedGeometry();
   void SetTaskbarVisible(bool visible);
   void CreateHotZoneWindow();
@@ -155,6 +184,16 @@ private:
   bool ResolveToolbarContext(const ToolbarButtonConfig& button, int& groupIndex, NoteGroupConfig& group,
     NoteFile& file, const NoteFile*& filePtr) const;
   void RunToolbarButton(size_t index);
+  void ApplyHotKeys();
+  void UnregisterHotKeys();
+  void ExecuteHotKeyCommand(HotKeyBinding binding);
+  void NotifyHotKeyWarnings();
+  void ShowHotKeyError(const std::wstring& message);
+  int FindGroupIndexById(const std::wstring& id) const;
+  int ResolveHotKeyGroupIndex(const HotKeyBinding& binding) const;
+  bool FindFileInGroup(int groupIndex, const std::wstring& item, NoteFile& file) const;
+  bool ResolveHotKeyFile(const HotKeyBinding& binding, int& groupIndex, NoteGroupConfig& group, NoteFile& file) const;
+  void RunActionById(const std::wstring& actionId, int groupIndex, const NoteFile* file, bool wait);
   void HandleListLeftClick(POINT pt);
   void HandleListRightClick(POINT pt);
   void ArmItemDrag(POINT pt);
@@ -228,9 +267,12 @@ private:
   std::wstring globalStatusMessage_{};
   std::wstring currentConfigPath_{};
   std::wstring listTooltipText_{};
-  std::wstring hotKeySpec_ = L"Ctrl+Alt+B";
-  UINT hotKeyModifiers_ = MOD_CONTROL | MOD_ALT;
-  UINT hotKeyVk_ = 'B';
+  std::wstring defaultGroupId_;
+  std::vector<HotKeyBinding> hotKeys_{};
+  std::vector<std::wstring> hotKeyWarnings_{};
+  std::wstring lastHotKeyWarningText_;
+  bool trayIconAdded_ = false;
+  bool hotKeyBusy_ = false;
   Animation animation_{};
   ULONGLONG lastPointerInsideTick_ = 0;
   bool suppressWindowTracking_ = false;

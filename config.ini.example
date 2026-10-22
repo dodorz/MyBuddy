@@ -9,6 +9,46 @@
 ; Simple supported forms: Ctrl+Alt+B, Ctrl+Shift+1, Alt+F6
 ; Default: Ctrl+Alt+B
 globalHotKey=Ctrl+Alt+B
+; Optional fallback group id when a [hotkey.*] entry omits group=.
+; defaultGroup=inbox
+
+; Optional global shortcuts. One key per [hotkey.<id>] section.
+; key= is required and needs at least one modifier: Ctrl, Alt, Shift, or Win.
+; Commands:
+; window.toggle, window.show, config.reload, config.open
+; group.toggle, group.addNote, group.addFromClipboard, group.action
+; file.action, current.action
+; group= is a group id, not a title. action= is an [action.*] id.
+; file.action can use file=<absolute path>, or group=<id> and item=<name>.
+; wait=1 makes supporting actions wait for process exit and refresh the group.
+; Hotkeys are system-wide and are reported through the tray if registration fails.
+;
+; [hotkey.inboxNew]
+; key=Ctrl+Alt+N
+; command=group.addNote
+; group=inbox
+;
+; [hotkey.inboxClipboard]
+; key=Ctrl+Alt+V
+; command=group.addFromClipboard
+; group=inbox
+;
+; [hotkey.workTerminal]
+; key=Ctrl+Alt+T
+; command=group.action
+; group=work
+; action=Terminal
+;
+; [hotkey.dailyEdit]
+; key=Ctrl+Alt+D
+; command=file.action
+; file=D:\Notes\Work\daily.md
+; action=Edit
+;
+; [hotkey.revealCurrent]
+; key=Ctrl+Alt+R
+; command=current.action
+; action=Reveal
 
 [toolbar]
 ; Optional top toolbar buttons, in display order, separated by ';'.
