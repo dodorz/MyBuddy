@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <fstream>
 #include <set>
+#include <unordered_map>
 #include <shellapi.h>
 
 namespace {
@@ -651,14 +652,60 @@ MarkdownFrontMatter ParseMarkdownFrontMatter(const std::vector<std::wstring>& li
 
 bool IsMarkdownFileName(const std::wstring& name) {
   const size_t dot = name.find_last_of(L'.');
-  if (dot == std::wstring::npos) return false;
-  return ToLower(NormalizeExtension(name.substr(dot))) == L".md";
+  if (dot == std::wstring::npos || name.size() - dot != 3) return false;
+  return towlower(name[dot + 1]) == L'm' && towlower(name[dot + 2]) == L'd';
 }
 
-bool IsMarkdownFilePinned(const std::wstring& path) {
-  std::vector<std::wstring> lines = SplitLines(ReadTextFilePrefix(path, 64 * 1024));
-  size_t contentStartLine = 0;
-  return ParseMarkdownFrontMatter(lines, contentStartLine).pinned;
+constexpr size_t kPinnedFrontMatterProbeBytes = 512;
+constexpr size_t kPinnedFrontMatterReadBytes = 16 * 1024;
+constexpr size_t kPinnedFrontMatterMaxBytes = 64 * 1024;
+constexpr size_t kPinnedCacheLimit = 32768;
+
+struct PinnedCacheEntry {
+  FILETIME modifiedTime{};
+  ULONGLONG size = 0;
+  bool pinned = false;
+};
+
+std::unordered_map<std::wstring, PinnedCacheEntry> gPinnedCache;
+
+bool IsMarkdownFilePinned(const NoteFile& file) {
+  auto cached = gPinnedCache.find(file.path);
+  if (cached != gPinnedCache.end() &&
+      CompareFileTime(&cached->second.modifiedTime, &file.modifiedTime) == 0 &&
+      cached->second.size == file.size) {
+    return cached->second.pinned;
+  }
+
+  // Reading just the first line avoids touching most Markdown files that have
+  // no front matter at all. Files that do start with front matter are read in
+  // full only up to the pin parsing limit.
+  std::wstring head = ReadTextFilePrefix(file.path, kPinnedFrontMatterProbeBytes);
+  bool readOk = !head.empty() || file.size == 0;
+  bool pinned = false;
+  const size_t firstLineEnd = head.find_first_of(L"\r\n");
+  const std::wstring firstLine = Trim(head.substr(0, firstLineEnd == std::wstring::npos ? head.size() : firstLineEnd));
+  const bool hasFrontMatter = firstLine == L"+++" || firstLine == L"---";
+  if (hasFrontMatter) {
+    std::wstring text = ReadTextFilePrefix(file.path, kPinnedFrontMatterReadBytes);
+    readOk = readOk && (!text.empty() || file.size == 0);
+    std::vector<std::wstring> lines = SplitLines(text);
+    size_t contentStartLine = 0;
+    if (!TryFindTomlFrontMatter(lines, contentStartLine) && file.size > kPinnedFrontMatterReadBytes) {
+      text = ReadTextFilePrefix(file.path, kPinnedFrontMatterMaxBytes);
+      readOk = readOk && (!text.empty() || file.size == 0);
+      lines = SplitLines(text);
+      contentStartLine = 0;
+    }
+    pinned = ParseMarkdownFrontMatter(lines, contentStartLine).pinned;
+  }
+
+  // Avoid caching a transient read failure as a permanent "not pinned" result.
+  if (readOk) {
+    if (gPinnedCache.size() >= kPinnedCacheLimit) gPinnedCache.clear();
+    gPinnedCache[file.path] = PinnedCacheEntry{file.modifiedTime, file.size, pinned};
+  }
+  return pinned;
 }
 
 std::wstring TryParseTomlTitle(const std::vector<std::wstring>& lines, size_t& contentStartLine) {
@@ -1138,6 +1185,7 @@ void LoadNoteFiles(const NoteGroupConfig& group, std::vector<NoteFile>& files, N
         file.itemText = file.stem;
         file.createdTime = ffd.ftCreationTime;
         file.modifiedTime = ffd.ftLastWriteTime;
+        file.size = (static_cast<ULONGLONG>(ffd.nFileSizeHigh) << 32) | ffd.nFileSizeLow;
         files.push_back(file);
       } while (FindNextFileW(h, &ffd));
       FindClose(h);
@@ -1173,6 +1221,7 @@ void LoadNoteFiles(const NoteGroupConfig& group, std::vector<NoteFile>& files, N
         file.lineNumber = static_cast<int>(i + 1);
         file.createdTime = data.ftCreationTime;
         file.modifiedTime = data.ftLastWriteTime;
+        file.size = (static_cast<ULONGLONG>(data.nFileSizeHigh) << 32) | data.nFileSizeLow;
         files.push_back(file);
       }
     } else {
@@ -1200,6 +1249,7 @@ void LoadNoteFiles(const NoteGroupConfig& group, std::vector<NoteFile>& files, N
         file.lineNumber = static_cast<int>(i + 1);
         file.createdTime = data.ftCreationTime;
         file.modifiedTime = data.ftLastWriteTime;
+        file.size = (static_cast<ULONGLONG>(data.nFileSizeHigh) << 32) | data.nFileSizeLow;
         files.push_back(file);
       }
     }
@@ -1234,10 +1284,13 @@ void LoadNoteFiles(const NoteGroupConfig& group, std::vector<NoteFile>& files, N
   std::sort(files.begin(), files.end(), compare);
 
   if (group.type == NoteGroupType::Directory && group.maxPinned > 0 && !files.empty()) {
+    // files is already in display order. Scan it and stop as soon as the
+    // allowed number of effective pinned files has been found; older or later
+    // files keep their normal sorted position.
     std::vector<bool> effectivePinned(files.size(), false);
     int pinnedCount = 0;
     for (size_t i = 0; i < files.size() && pinnedCount < group.maxPinned; ++i) {
-      if (!IsMarkdownFileName(files[i].name) || !IsMarkdownFilePinned(files[i].path)) continue;
+      if (!IsMarkdownFileName(files[i].name) || !IsMarkdownFilePinned(files[i])) continue;
       effectivePinned[i] = true;
       ++pinnedCount;
     }
@@ -1277,6 +1330,89 @@ void LoadNoteFiles(const NoteGroupConfig& group, std::vector<NoteFile>& files, N
   if (files.empty() && state) {
     *state = NoteGroupLoadState::Empty;
   }
+}
+
+bool IsMarkdownNoteFile(const NoteFile& file) {
+  return IsMarkdownFileName(file.name);
+}
+
+bool IsNoteFilePinned(const NoteFile& file, bool& pinned, std::wstring* errorMessage) {
+  pinned = false;
+  if (!IsMarkdownNoteFile(file)) {
+    if (errorMessage) *errorMessage = L"Pin is only supported for Markdown files.";
+    return false;
+  }
+  pinned = IsMarkdownFilePinned(file);
+  return true;
+}
+
+bool SetNoteFilePinned(const NoteFile& file, bool pinned, std::wstring* errorMessage) {
+  if (!IsMarkdownNoteFile(file)) {
+    if (errorMessage) *errorMessage = L"Pin is only supported for Markdown files.";
+    return false;
+  }
+
+  EditableTextFile textFile{};
+  if (!ReadEditableTextFile(file.path, textFile, errorMessage)) return false;
+
+  std::vector<std::wstring> lines = SplitLines(textFile.text);
+  size_t contentStartLine = 0;
+  bool changed = false;
+
+  if (TryFindTomlFrontMatter(lines, contentStartLine)) {
+    const std::wstring delimiter = Trim(lines[0]);
+    const size_t frontMatterEnd = contentStartLine - 1;
+    size_t pinnedLine = std::wstring::npos;
+
+    for (size_t i = 1; i < frontMatterEnd; ++i) {
+      const std::wstring line = Trim(lines[i]);
+      if (line.empty()) continue;
+      const size_t equals = line.find(L'=');
+      const size_t colon = line.find(L':');
+      size_t separator = std::wstring::npos;
+      if (equals == std::wstring::npos) separator = colon;
+      else if (colon == std::wstring::npos) separator = equals;
+      else separator = std::min(equals, colon);
+      if (separator == std::wstring::npos) continue;
+      if (ToLower(Trim(line.substr(0, separator))) == L"pinned") {
+        pinnedLine = i;
+        break;
+      }
+    }
+
+    if (pinnedLine != std::wstring::npos) {
+      std::wstring line = lines[pinnedLine];
+      const size_t equals = line.find(L'=');
+      const size_t colon = line.find(L':');
+      size_t separator = std::wstring::npos;
+      if (equals == std::wstring::npos) separator = colon;
+      else if (colon == std::wstring::npos) separator = equals;
+      else separator = std::min(equals, colon);
+      if (separator == std::wstring::npos) {
+        if (errorMessage) *errorMessage = L"Could not update the pinned front matter field.";
+        return false;
+      }
+      const std::wstring updated = line.substr(0, separator + 1) + L" " + (pinned ? L"true" : L"false");
+      if (updated != line) {
+        lines[pinnedLine] = updated;
+        changed = true;
+      }
+    } else if (pinned) {
+      const std::wstring newLine = delimiter == L"---" ? L"pinned: true" : L"pinned = true";
+      lines.insert(lines.begin() + static_cast<std::ptrdiff_t>(frontMatterEnd), newLine);
+      changed = true;
+    }
+  } else if (pinned) {
+    std::vector<std::wstring> frontMatter{L"+++", L"pinned = true", L"+++"};
+    if (!lines.empty() && !Trim(lines.front()).empty()) frontMatter.push_back(L"");
+    lines.insert(lines.begin(), frontMatter.begin(), frontMatter.end());
+    changed = true;
+  }
+
+  if (!changed) return true;
+  if (!WriteEditableTextFile(file.path, textFile, lines, errorMessage)) return false;
+  gPinnedCache.erase(file.path);
+  return true;
 }
 
 bool ToggleMarkdownCheckbox(const NoteFile& file, std::wstring* errorMessage) {

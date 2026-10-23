@@ -453,6 +453,8 @@ Optional keys:
 - Additional pinned files are not moved and keep their normal sorted position.
 - Among pinned files and among non-pinned files, the configured sort order is preserved.
 - `maxItems` is applied after pinned files are moved, so pinned files count toward the visible limit.
+- Right-click a Markdown file in a `dirgroup` and choose `Pin` or `Unpin` to update its front matter.
+- Pinning a file without front matter creates a `+++` front matter block with `pinned = true`.
 
 Example:
 
@@ -514,6 +516,7 @@ File item right-click menu:
 
 - default file action
 - file actions from `fileActions`
+- `Pin` / `Unpin` for Markdown files in `dirgroup`
 - delete item
 
 Text-group header right-click menu:

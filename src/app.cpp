@@ -961,6 +961,7 @@ bool BuildGroupSourceFile(const NoteGroupConfig& group, NoteFile& file) {
   file.lineNumber = 0;
   file.createdTime = data.ftCreationTime;
   file.modifiedTime = data.ftLastWriteTime;
+  file.size = (static_cast<ULONGLONG>(data.nFileSizeHigh) << 32) | data.nFileSizeLow;
   return true;
 }
 
@@ -978,6 +979,7 @@ bool BuildNoteFileFromPath(const std::wstring& path, NoteFile& file) {
   file.displayName = file.name;
   file.createdTime = data.ftCreationTime;
   file.modifiedTime = data.ftLastWriteTime;
+  file.size = (static_cast<ULONGLONG>(data.nFileSizeHigh) << 32) | data.nFileSizeLow;
   return true;
 }
 
@@ -4329,7 +4331,14 @@ void App::RunFileMenu(int groupIndex, int subdirIndex, int fileIndex, POINT scre
   constexpr UINT kMenuRefresh = 5000;
   constexpr UINT kMenuConfig = 5001;
   constexpr UINT kMenuDelete = 5002;
+  constexpr UINT kMenuPin = 5003;
   const bool canDelete = group.type == NoteGroupType::Directory && !group.deleteTitle.empty();
+  const bool canPin = group.type == NoteGroupType::Directory && IsMarkdownNoteFile(*file);
+  bool pinned = false;
+  if (canPin) {
+    std::wstring pinError;
+    IsNoteFilePinned(*file, pinned, &pinError);
+  }
 
   UINT nextActionId = 5100;
   std::unordered_map<UINT, std::wstring> actionIds;
@@ -4351,8 +4360,9 @@ void App::RunFileMenu(int groupIndex, int subdirIndex, int fileIndex, POINT scre
   std::vector<ConfiguredMenuEntry> configuredEntries =
     BuildConfiguredMenuEntries(group.itemActions, notesConfig_.actions, file, !actionIds.empty(), &group.defaultItemAction);
   AppendConfiguredMenuEntries(menu, configuredEntries, notesConfig_.actions, nextActionId, actionIds);
+  if (canPin) AppendMenuW(menu, MF_STRING, kMenuPin, pinned ? L"Unpin" : L"Pin");
   if (canDelete) AppendMenuW(menu, MF_STRING, kMenuDelete, group.deleteTitle.c_str());
-  if (!actionIds.empty() || canDelete) AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+  if (!actionIds.empty() || canPin || canDelete) AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
   AppendMenuW(menu, MF_STRING, kMenuRefresh, L"Refresh");
   AppendMenuW(menu, MF_STRING, kMenuConfig, L"Config");
 
@@ -4360,7 +4370,15 @@ void App::RunFileMenu(int groupIndex, int subdirIndex, int fileIndex, POINT scre
   UINT cmd = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_LEFTALIGN | TPM_TOPALIGN,
     screenPt.x, screenPt.y, 0, hwnd_, nullptr);
   DestroyMenu(menu);
-  if (canDelete && cmd == kMenuDelete) {
+  if (canPin && cmd == kMenuPin) {
+    std::wstring errorMessage;
+    if (!SetNoteFilePinned(*file, !pinned, &errorMessage)) {
+      std::wstring message = L"Failed to update pin state.\n\n" + errorMessage;
+      MessageBoxW(hwnd_, message.c_str(), L"MyBuddy", MB_OK | MB_ICONERROR);
+      return;
+    }
+    RefreshGroup(groupIndex);
+  } else if (canDelete && cmd == kMenuDelete) {
     DeleteFileNote(groupIndex, subdirIndex, fileIndex);
   } else if (cmd == kMenuRefresh) {
     ReloadConfigAndRefreshNotes();

@@ -103,6 +103,7 @@ struct NoteFile {
   int lineNumber = 0;
   FILETIME createdTime{};
   FILETIME modifiedTime{};
+  ULONGLONG size = 0;
 };
 
 struct VisibleRow {
@@ -123,6 +124,9 @@ struct VisibleRow {
 bool LoadNotesConfig(const std::wstring& path, NotesConfig& config);
 void LoadNoteFiles(const NoteGroupConfig& group, std::vector<NoteFile>& files, NoteGroupLoadState* state = nullptr,
   bool ignoreMaxItems = false);
+bool IsMarkdownNoteFile(const NoteFile& file);
+bool IsNoteFilePinned(const NoteFile& file, bool& pinned, std::wstring* errorMessage = nullptr);
+bool SetNoteFilePinned(const NoteFile& file, bool pinned, std::wstring* errorMessage = nullptr);
 bool ToggleMarkdownCheckbox(const NoteFile& file, std::wstring* errorMessage = nullptr);
 bool ToggleTodoTxtTask(const NoteFile& file, std::wstring* errorMessage = nullptr);
 bool MoveTextFileLine(const NoteFile& file, int targetLineNumber, bool insertAfter,
