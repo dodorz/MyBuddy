@@ -9,7 +9,7 @@ The config file must be saved as UTF-8 without BOM.
 - Each note group maps either to one directory or to one text file.
 - Directory groups use files as items.
 - `text` groups use non-empty lines in one text file as items.
-- If a `text` group points to a Markdown file and that file starts with TOML front matter delimited by `+++` or `---`, the front matter block is ignored.
+- If a `text` group points to a Markdown file and that file starts with TOML/YAML front matter delimited by `+++` or `---`, the front matter block is ignored.
 - Groups are shown together in one list.
 - Group headers are collapsible.
 - Directory-group file items can be dragged to a directory-group header, subdirectory header, or file item to move them into that folder. The source and destination may belong to different groups or to different direct subdirectories of one group. Drops into the current folder are ignored and MyBuddy never overwrites an existing destination file.
@@ -251,6 +251,10 @@ Supported keys:
   - Max visible note items per group.
   - `0` means unlimited
   - Default: `5`
+- `maxPinned`
+  - Max number of directory-group Markdown files that are actually treated as pinned
+  - `0` disables pinned handling
+  - Default: `3`
 - `defaultGroupExpanded`
   - `1` or `0`
   - Default: `1`
@@ -290,6 +294,10 @@ Supported keys for `[notes_dir_default]`:
   - Max visible note items per group.
   - `0` means unlimited
   - Default: inherits `[notes_default]`, otherwise `5`
+- `maxPinned`
+  - Max number of Markdown files treated as pinned in each directory group
+  - `0` disables pinned handling
+  - Default: inherits `[notes_default]`, otherwise `3`
 - `sortBy`
   - Supported: `name`, `ctime`, `mtime`
   - Default: `mtime`
@@ -398,6 +406,10 @@ Optional keys:
 - `maxItems`
   - If missing, inherits typed default `maxItems`
   - `0` means unlimited
+- `maxPinned`
+  - Applies to `dir` groups only
+  - If missing, inherits typed default `maxPinned`
+  - `0` disables pinned handling
 - `sortBy`
   - If missing, inherits typed default `sortBy`
 - `sortOrder`
@@ -423,12 +435,35 @@ Optional keys:
 
 - Directory groups are filtered first.
 - Items are sorted second.
+- Effective pinned Markdown files are moved to the top.
 - `maxItems` is applied last.
 - `maxItems=0` disables item count truncation.
+- `maxPinned=0` disables pinned handling.
 - If `sortBy=line`, items keep source line order.
 - If `sortBy=name`, secondary sort is `mtime desc`.
 - If `sortBy=ctime`, secondary sort is `name asc`.
 - If `sortBy=mtime`, secondary sort is `name asc`.
+
+## Pinned Markdown Notes
+
+- Pinned state is read from Markdown front matter delimited by `+++` or `---`.
+- The front matter key is `pinned`.
+- Truthy values are `true`, `yes`, `on`, and `1`, case-insensitive.
+- After normal sorting, the first `maxPinned` pinned files are moved to the top.
+- Additional pinned files are not moved and keep their normal sorted position.
+- Among pinned files and among non-pinned files, the configured sort order is preserved.
+- `maxItems` is applied after pinned files are moved, so pinned files count toward the visible limit.
+
+Example:
+
+```markdown
++++
+title = "Daily note"
+pinned = true
++++
+
+# Daily note
+```
 
 ## File Matching
 
@@ -437,7 +472,7 @@ Optional keys:
 - Only files are included, not subdirectories.
 - First implementation should enumerate one directory level only.
 - `text` groups do not use `filePatterns`.
-- For Markdown source files, leading TOML front matter delimited by `+++` or `---` is skipped before line items are generated.
+- For Markdown source files, leading TOML/YAML front matter delimited by `+++` or `---` is skipped before line items are generated and before title/pinned metadata is read.
 
 ## Add Note Behavior
 
@@ -457,7 +492,7 @@ Optional keys:
 Final filename rules:
 
 - For `.md` files:
-  - If the file starts with TOML front matter delimited by `+++` or `---` and contains `title`, use that `title`.
+  - If the file starts with TOML/YAML front matter delimited by `+++` or `---` and contains `title`, use that `title`.
   - Otherwise use the first non-empty content line.
   - If the first content line starts with Markdown heading markers such as `# ` or `## `, strip those markers first.
 - For `.txt` files:

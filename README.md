@@ -28,6 +28,7 @@ cmake --build --preset vs-x64-release
 - Drag directory-group file items onto a directory-group header, subdirectory header, or file item to move the file into that target folder. Drops within the current folder are ignored; existing destination filenames are never overwritten.
 - Drag `textgroup` or `todogroup` line items onto another line in the same group to reorder source-file lines. The blue marker indicates whether the line will be inserted before or after the target.
 - File actions and group actions are configured as command lines in `config.ini`.
+- Markdown front matter `pinned: true/yes/on/1` moves notes to the top of dir groups; `maxPinned` limits how many are treated as pinned.
 - Global shortcuts are configured with `[hotkey.<id>]` sections. They can open notes, create notes from the clipboard, or run group/file actions.
 - The list shows inline status rows for empty groups, missing directories, and missing note-group configuration.
 - Notes config reference: [docs/notes-config.md](/C:/~\Projects\MyBuddy\docs\notes-config.md)

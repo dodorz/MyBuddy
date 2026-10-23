@@ -597,7 +597,14 @@ bool TryFindTomlFrontMatter(const std::vector<std::wstring>& lines, size_t& cont
 struct MarkdownFrontMatter {
   std::wstring title;
   std::wstring author;
+  bool pinned = false;
 };
+
+bool IsTruthyFrontMatterValue(const std::wstring& value) {
+  const std::wstring normalized = ToLower(Trim(value));
+  return normalized == L"true" || normalized == L"yes" ||
+    normalized == L"on" || normalized == L"1";
+}
 
 std::wstring ParseFrontMatterValue(std::wstring value) {
   value = Trim(value);
@@ -635,9 +642,23 @@ MarkdownFrontMatter ParseMarkdownFrontMatter(const std::vector<std::wstring>& li
       metadata.title = value;
     } else if (normalizedKey == L"author") {
       metadata.author = value;
+    } else if (normalizedKey == L"pinned") {
+      metadata.pinned = IsTruthyFrontMatterValue(value);
     }
   }
   return metadata;
+}
+
+bool IsMarkdownFileName(const std::wstring& name) {
+  const size_t dot = name.find_last_of(L'.');
+  if (dot == std::wstring::npos) return false;
+  return ToLower(NormalizeExtension(name.substr(dot))) == L".md";
+}
+
+bool IsMarkdownFilePinned(const std::wstring& path) {
+  std::vector<std::wstring> lines = SplitLines(ReadTextFilePrefix(path, 64 * 1024));
+  size_t contentStartLine = 0;
+  return ParseMarkdownFrontMatter(lines, contentStartLine).pinned;
 }
 
 std::wstring TryParseTomlTitle(const std::vector<std::wstring>& lines, size_t& contentStartLine) {
@@ -899,6 +920,7 @@ bool LoadNotesConfig(const std::wstring& path, NotesConfig& config) {
   config.sharedDefaults.filePatterns = ReadLayeredList(ini, globalSection, L"filePatterns", nullptr, {L"*.txt", L"*.md"});
   config.sharedDefaults.createExtension = NormalizeExtension(ReadString(ini, globalSection, L"createExtension"));
   config.sharedDefaults.maxItems = NormalizeMaxItems(ReadInt(ini, globalSection, L"maxItems", 5), 5);
+  config.sharedDefaults.maxPinned = NormalizeMaxItems(ReadInt(ini, globalSection, L"maxPinned", 3), 3);
   config.sharedDefaults.showExtensions = false;
   config.sharedDefaults.showSubdir = false;
   config.sharedDefaults.defaultItemAction = ReadStringFallback(ini, globalSection, L"defaultItemAction", L"defaultFileAction");
@@ -921,6 +943,8 @@ bool LoadNotesConfig(const std::wstring& path, NotesConfig& config) {
     config.dirDefaults.createExtension.c_str()));
   config.dirDefaults.maxItems = NormalizeMaxItems(
     ReadInt(ini, dirDefaultsSection, L"maxItems", config.dirDefaults.maxItems), config.dirDefaults.maxItems);
+  config.dirDefaults.maxPinned = NormalizeMaxItems(
+    ReadInt(ini, dirDefaultsSection, L"maxPinned", config.dirDefaults.maxPinned), config.dirDefaults.maxPinned);
   config.dirDefaults.sortBy = NormalizeSortByForGroupType(NoteGroupType::Directory,
     ParseSortBy(ReadString(ini, dirDefaultsSection, L"sortBy"), config.dirDefaults.sortBy),
     config.dirDefaults.sortBy);
@@ -1058,6 +1082,7 @@ bool LoadNotesConfig(const std::wstring& path, NotesConfig& config) {
         group.filePatterns = ReadLayeredList(ini, section.c_str(), L"filePatterns", nullptr, defaults.filePatterns);
         group.createExtension = NormalizeExtension(ReadString(ini, section.c_str(), L"createExtension", defaults.createExtension.c_str()));
         group.maxItems = NormalizeMaxItems(ReadInt(ini, section.c_str(), L"maxItems", defaults.maxItems), defaults.maxItems);
+        group.maxPinned = NormalizeMaxItems(ReadInt(ini, section.c_str(), L"maxPinned", defaults.maxPinned), defaults.maxPinned);
         std::wstring rawSortBy = ReadString(ini, section.c_str(), L"sortBy");
         group.sortBy = NormalizeSortByForGroupType(group.type, ParseSortBy(rawSortBy, defaults.sortBy), defaults.sortBy);
         group.sortOrder = ParseSortOrder(ReadString(ini, section.c_str(), L"sortOrder"), defaults.sortOrder);
@@ -1207,6 +1232,29 @@ void LoadNoteFiles(const NoteGroupConfig& group, std::vector<NoteFile>& files, N
   };
 
   std::sort(files.begin(), files.end(), compare);
+
+  if (group.type == NoteGroupType::Directory && group.maxPinned > 0 && !files.empty()) {
+    std::vector<bool> effectivePinned(files.size(), false);
+    int pinnedCount = 0;
+    for (size_t i = 0; i < files.size() && pinnedCount < group.maxPinned; ++i) {
+      if (!IsMarkdownFileName(files[i].name) || !IsMarkdownFilePinned(files[i].path)) continue;
+      effectivePinned[i] = true;
+      ++pinnedCount;
+    }
+
+    if (pinnedCount > 0) {
+      std::vector<NoteFile> reordered;
+      reordered.reserve(files.size());
+      for (size_t i = 0; i < files.size(); ++i) {
+        if (effectivePinned[i]) reordered.push_back(std::move(files[i]));
+      }
+      for (size_t i = 0; i < files.size(); ++i) {
+        if (!effectivePinned[i]) reordered.push_back(std::move(files[i]));
+      }
+      files = std::move(reordered);
+    }
+  }
+
   if (!ignoreMaxItems && group.maxItems > 0 && static_cast<int>(files.size()) > group.maxItems) {
     files.resize(group.maxItems);
   }

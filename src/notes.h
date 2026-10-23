@@ -56,6 +56,7 @@ struct NoteGroupConfig {
   std::vector<std::wstring> filePatterns;
   std::wstring createExtension;
   int maxItems = 5;
+  int maxPinned = 3;
   NoteSortBy sortBy = NoteSortBy::ModifiedTime;
   SortOrder sortOrder = SortOrder::Desc;
   std::wstring defaultItemAction;
@@ -72,6 +73,7 @@ struct NoteGroupDefaults {
   std::vector<std::wstring> filePatterns{L"*.txt", L"*.md"};
   std::wstring createExtension;
   int maxItems = 5;
+  int maxPinned = 3;
   NoteSortBy sortBy = NoteSortBy::ModifiedTime;
   SortOrder sortOrder = SortOrder::Desc;
   std::wstring defaultItemAction;

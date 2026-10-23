@@ -82,6 +82,10 @@ globalHotKey=Ctrl+Alt+B
 ; Maximum visible items per group.
 ; Integer >= 0. 0 means unlimited. Default: 5
 maxItems=5
+; Maximum number of directory-group Markdown files treated as pinned.
+; Pinned files use front matter pinned=true/yes/on/1 and are moved to the top.
+; Integer >= 0. 0 disables pinned handling. Default: 3
+maxPinned=3
 ; Whether groups start expanded by default.
 ; Allowed values: 0, 1
 defaultGroupExpanded=1
@@ -120,6 +124,10 @@ filePatterns=*.txt;*.md
 ; Examples: .txt, .md
 ; If empty, the first writable extension from filePatterns is used.
 createExtension=.md
+; Maximum number of pinned Markdown files in each dir group.
+; Only the first N pinned files are moved to the top. 0 disables pinning.
+; Default: inherits [default], otherwise 3
+maxPinned=3
 ; Default sort field for dir groups.
 ; Allowed values: name, ctime, mtime
 sortBy=mtime
@@ -253,6 +261,9 @@ path=C:\Users\USERNAME\Documents\Notes\Inbox
 ; Optional per-group override for max visible items.
 ; 0 means unlimited.
 ; maxItems=5
+; Optional per-group override for the number of pinned Markdown files.
+; Only the first N pinned files are moved to the top. 0 disables pinning.
+; maxPinned=3
 ; Optional per-group override for sort field.
 ; Allowed values: name, ctime, mtime
 ; sortBy=mtime
