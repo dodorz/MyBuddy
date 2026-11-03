@@ -10,6 +10,7 @@
 #include <windowsx.h>
 
 #include <algorithm>
+#include <climits>
 #include <set>
 
 #ifndef MOD_NOREPEAT
@@ -39,17 +40,27 @@ constexpr int kToolbarHeightPx = 32;
 constexpr int kToolbarButtonSizePx = 24;
 constexpr int kToolbarPaddingPx = 4;
 constexpr wchar_t kMainClass[] = L"MyBuddyMainClass";
-constexpr wchar_t kHotZoneClass[] = L"MyBuddyHotZoneClass";
 constexpr wchar_t kSingleInstanceMutexName[] = L"Local\\MyBuddy.SingleInstance";
 constexpr int kSnapThresholdPx = 28;
-constexpr int kHotZoneThicknessPx = 2;
+// Thickness of the screen-edge strip that reveals a collapsed window, and how
+// far away from the edge the pointer must travel before the reveal re-arms.
+constexpr int kRevealThicknessDip = 3;
+constexpr int kRevealBandMarginDip = 160;
+constexpr int kRevealRearmMarginDip = 48;
+constexpr int kPointerHitPaddingDip = 4;
 constexpr int kAutoHideDelayMs = 420;
-constexpr int kAutoHidePollMs = 80;
+constexpr int kAutoHidePollMs = 50;
 constexpr int kAutoRefreshPollMs = 125;
 constexpr int kAutoRefreshDebounceMs = 300;
 constexpr int kExpandDurationMs = 210;
 constexpr int kCollapseDurationMs = 300;
 constexpr int kAnimationTickMs = 16;
+
+int ScaleDip(HWND hwnd, int dip) {
+  int dpi = hwnd ? GetDpiForWindow(hwnd) : 0;
+  if (dpi <= 0) dpi = 96;
+  return MulDiv(dip, dpi, 96);
+}
 
 std::wstring EnsureTrailingSlash(std::wstring path) {
   if (!path.empty() && path.back() != L'\\') path.push_back(L'\\');
@@ -1342,16 +1353,6 @@ int App::Run(HINSTANCE instance, int showCmd) {
   wc.cbWndExtra = sizeof(LONG_PTR);
   RegisterClassExW(&wc);
 
-  WNDCLASSEXW hotZoneClass{};
-  hotZoneClass.cbSize = sizeof(hotZoneClass);
-  hotZoneClass.lpfnWndProc = App::HotZoneWndProc;
-  hotZoneClass.hInstance = instance_;
-  hotZoneClass.hCursor = LoadCursorW(nullptr, IDC_ARROW);
-  hotZoneClass.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
-  hotZoneClass.lpszClassName = kHotZoneClass;
-  hotZoneClass.cbWndExtra = sizeof(LONG_PTR);
-  RegisterClassExW(&hotZoneClass);
-
   const std::wstring title = L"MyBuddy";
 
   hwnd_ = CreateWindowExW(
@@ -1398,17 +1399,6 @@ LRESULT CALLBACK App::MainWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
   return self ? self->HandleMainMessage(hwnd, msg, wp, lp) : DefWindowProcW(hwnd, msg, wp, lp);
 }
 
-LRESULT CALLBACK App::HotZoneWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
-  App* self = reinterpret_cast<App*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
-  if (msg == WM_NCCREATE) {
-    auto* cs = reinterpret_cast<CREATESTRUCTW*>(lp);
-    self = reinterpret_cast<App*>(cs->lpCreateParams);
-    SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(self));
-    self->hotZone_ = hwnd;
-  }
-  return self ? self->HandleHotZoneMessage(hwnd, msg, wp, lp) : DefWindowProcW(hwnd, msg, wp, lp);
-}
-
 LRESULT CALLBACK App::ListBoxProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
   App* self = reinterpret_cast<App*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
   return self ? self->HandleListBoxMessage(hwnd, msg, wp, lp) : DefWindowProcW(hwnd, msg, wp, lp);
@@ -1423,7 +1413,6 @@ LRESULT App::HandleMainMessage(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         InitializeDefaultState();
       }
       ApplyHotKeys();
-      CreateHotZoneWindow();
       CreateFonts();
       CreateControls();
       ApplySavedGeometry();
@@ -1577,7 +1566,9 @@ LRESULT App::HandleMainMessage(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
       RECT r{};
       GetWindowRect(hwnd_, &r);
       CommitVisibleRect(r, true);
-      SyncHotZone();
+      UpdateDockMonitor();
+      lastPointerInsideTick_ = GetTickCount64();
+      revealArmed_ = false;
       return 0;
     }
     case WM_MOVE: {
@@ -1585,8 +1576,21 @@ LRESULT App::HandleMainMessage(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
       RECT r{};
       GetWindowRect(hwnd_, &r);
       CommitVisibleRect(r, false);
-      SyncHotZone();
+      UpdateDockMonitor();
       return 0;
+    }
+    case WM_DISPLAYCHANGE:
+      ResyncDockGeometry();
+      return 0;
+    case WM_SETTINGCHANGE: {
+      // Only react to work-area/taskbar changes; the same message is broadcast
+      // for unrelated settings and would otherwise re-position the window.
+      const wchar_t* area = reinterpret_cast<const wchar_t*>(lp);
+      if (wp == SPI_SETWORKAREA || !area || area[0] == L'\0' ||
+          _wcsicmp(area, L"TraySettings") == 0) {
+        ResyncDockGeometry();
+      }
+      break;
     }
     case WM_CLOSE:
       ShowToTray();
@@ -1598,7 +1602,6 @@ LRESULT App::HandleMainMessage(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
       UnregisterHotKeys();
       DestroyPendingNoteEditors();
       DestroyAutoRefreshWatchers();
-      DestroyHotZoneWindow();
       if (singleInstanceMutex_) {
         CloseHandle(singleInstanceMutex_);
         singleInstanceMutex_ = nullptr;
@@ -1620,19 +1623,6 @@ LRESULT App::HandleMainMessage(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         return 0;
       }
       break;
-  }
-  return DefWindowProcW(hwnd, msg, wp, lp);
-}
-
-LRESULT App::HandleHotZoneMessage(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
-  switch (msg) {
-    case WM_MOUSEMOVE:
-    case WM_LBUTTONDOWN:
-    case WM_LBUTTONUP:
-      RequestExpand(msg != WM_MOUSEMOVE);
-      return 0;
-    case WM_NCHITTEST:
-      return HTCLIENT;
   }
   return DefWindowProcW(hwnd, msg, wp, lp);
 }
@@ -1914,8 +1904,9 @@ void App::ShowToTray() {
   animation_.active = false;
   KillTimer(hwnd_, kAnimationTimerId);
   SetTaskbarVisible(false);
-  SyncHotZone();
   HideMainWindow();
+  // Hidden on purpose, so the edge must not immediately bring it back.
+  revealArmed_ = false;
   SaveState();
 }
 
@@ -1951,32 +1942,62 @@ void App::ActivateMainWindow() {
   }
 }
 
-void App::CreateHotZoneWindow() {
-  if (hotZone_) return;
-  hotZone_ = CreateWindowExW(
-    WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_LAYERED | WS_EX_NOACTIVATE,
-    kHotZoneClass,
-    L"",
-    WS_POPUP,
-    0, 0, 1, 1,
-    nullptr,
-    nullptr,
-    instance_,
-    this);
-  if (hotZone_) {
-    SetLayeredWindowAttributes(hotZone_, 0, 1, LWA_ALPHA);
+HMONITOR App::GetDockMonitor() const {
+  // While the window is live and on screen it defines the dock monitor, so
+  // dragging it to another display follows the pointer correctly. Once it is
+  // hidden or parked outside the screen, MonitorFromWindow() would resolve to
+  // a neighbouring display, so the last known monitor (or the stored geometry)
+  // is used instead.
+  const bool live = !animation_.active && !trayHidden_ && state_.expanded &&
+                    hwnd_ && IsWindowVisible(hwnd_) && !IsIconic(hwnd_);
+  if (IsDocked() && live) {
+    return MonitorFromWindow(hwnd_, MONITOR_DEFAULTTONEAREST);
   }
+
+  if (dockMonitor_) {
+    MONITORINFO info{ sizeof(info) };
+    if (GetMonitorInfoW(dockMonitor_, &info)) return dockMonitor_;
+  }
+
+  if (IsDocked()) {
+    // GetExpandedRect() depends on the work area, which in turn depends on this
+    // function, so derive the display from the stored (unprojected) rectangle.
+    RECT stored{ state_.x, state_.y, state_.x + std::max(300, state_.w),
+      state_.y + std::max(280, state_.h) };
+    return MonitorFromRect(&stored, MONITOR_DEFAULTTONEAREST);
+  }
+
+  return MonitorFromWindow(hwnd_ ? hwnd_ : GetDesktopWindow(), MONITOR_DEFAULTTONEAREST);
 }
 
-void App::DestroyHotZoneWindow() {
-  if (hotZone_) {
-    DestroyWindow(hotZone_);
-    hotZone_ = nullptr;
+void App::UpdateDockMonitor() {
+  dockMonitor_ = nullptr;
+  dockMonitor_ = GetDockMonitor();
+}
+
+void App::ResyncDockGeometry() {
+  // Taskbar moved / monitor topology or resolution changed: the cached work
+  // area may be stale, so re-resolve it and re-target the window.
+  UpdateDockMonitor();
+  if (!IsDocked()) return;
+
+  const RECT target = (state_.expanded && !trayHidden_) ? GetExpandedRect() : GetCollapsedRect();
+  suppressWindowTracking_ = true;
+  SetWindowPos(hwnd_, HWND_TOPMOST, target.left, target.top,
+    target.right - target.left, target.bottom - target.top,
+    SWP_NOACTIVATE | SWP_NOZORDER);
+  suppressWindowTracking_ = false;
+  lastPointerInsideTick_ = GetTickCount64();
+  if (!state_.expanded) {
+    // Geometry changed underneath a parked panel: allow the edge to reveal it
+    // again once the pointer leaves the neighbourhood.
+    revealArmed_ = true;
   }
 }
 
 RECT App::GetWorkArea() const {
-  const HMONITOR monitor = MonitorFromWindow(hwnd_ ? hwnd_ : GetDesktopWindow(), MONITOR_DEFAULTTONEAREST);
+  HMONITOR monitor = GetDockMonitor();
+  if (!monitor) monitor = MonitorFromWindow(hwnd_ ? hwnd_ : GetDesktopWindow(), MONITOR_DEFAULTTONEAREST);
   MONITORINFO info{ sizeof(info) };
   GetMonitorInfoW(monitor, &info);
   return info.rcWork;
@@ -2019,6 +2040,10 @@ App::DockEdge App::NormalizeDockEdge(DockEdge edge) const {
     return GetFallbackDockEdge();
   }
   return edge;
+}
+
+App::DockEdge App::GetDockEdge() const {
+  return NormalizeDockEdge(static_cast<DockEdge>(state_.dockEdge));
 }
 
 bool App::IsDocked() const {
@@ -2152,36 +2177,69 @@ RECT App::GetCollapsedRect() const {
   return rect;
 }
 
-RECT App::GetHotZoneRect() const {
-  RECT work = GetWorkArea();
-  switch (NormalizeDockEdge(static_cast<DockEdge>(state_.dockEdge))) {
+RECT App::GetRevealRect() const {
+  // The strip along the docked edge of the dock monitor that brings the panel
+  // back. It is tied to the *docked* edge of the *dock* monitor, never to
+  // whatever display MonitorFromWindow() happens to report while the window is
+  // parked off screen, and it is limited to the edge band the panel occupies so
+  // that sliding along the same edge elsewhere does not pop it out.
+  const DockEdge edge = GetDockEdge();
+  if (edge == DockEdge::None) return RECT{ 0, 0, 0, 0 };
+
+  const RECT work = GetWorkArea();
+  const RECT band = GetExpandedRect();
+  const int thickness = std::clamp(ScaleDip(hwnd_, kRevealThicknessDip), 1, 16);
+  const int margin = std::clamp(ScaleDip(hwnd_, kRevealBandMarginDip), thickness, 4000);
+
+  switch (edge) {
     case DockEdge::Left:
-      return RECT{ work.left, work.top, work.left + kHotZoneThicknessPx, work.bottom };
+      return RECT{ work.left, std::max(work.top, band.top - margin),
+        work.left + thickness, std::min(work.bottom, band.bottom + margin) };
     case DockEdge::Right:
-      return RECT{ work.right - kHotZoneThicknessPx, work.top, work.right, work.bottom };
+      return RECT{ work.right - thickness, std::max(work.top, band.top - margin),
+        work.right, std::min(work.bottom, band.bottom + margin) };
     case DockEdge::Top:
-      return RECT{ work.left, work.top, work.right, work.top + kHotZoneThicknessPx };
+      return RECT{ std::max(work.left, band.left - margin), work.top,
+        std::min(work.right, band.right + margin), work.top + thickness };
     case DockEdge::Bottom:
-      return RECT{ work.left, work.bottom - kHotZoneThicknessPx, work.right, work.bottom };
+      return RECT{ std::max(work.left, band.left - margin), work.bottom - thickness,
+        std::min(work.right, band.right + margin), work.bottom };
     case DockEdge::None:
     default:
       return RECT{ 0, 0, 0, 0 };
   }
 }
 
-void App::SyncHotZone() {
-  if (!hotZone_) return;
-  const bool show = IsDocked() && !trayHidden_ && !state_.expanded && !animation_.active;
-  hotZoneVisible_ = show;
-  if (!show) {
-    ShowWindow(hotZone_, SW_HIDE);
-    return;
+int App::DistanceFromDockEdge(POINT pt) const {
+  const RECT work = GetWorkArea();
+  switch (GetDockEdge()) {
+    case DockEdge::Left: return pt.x - work.left;
+    case DockEdge::Right: return work.right - pt.x;
+    case DockEdge::Top: return pt.y - work.top;
+    case DockEdge::Bottom: return work.bottom - pt.y;
+    case DockEdge::None:
+    default: return INT_MAX;
+  }
+}
+
+bool App::IsMenuModeActive() const {
+  // Only *our* thread matters here: another application opening a menu must not
+  // freeze the auto-hide behaviour.
+  GUITHREADINFO info{};
+  info.cbSize = sizeof(info);
+  if (GetGUIThreadInfo(GetCurrentThreadId(), &info) &&
+      (info.flags & (GUI_INMENUMODE | GUI_POPUPMENUMODE | GUI_SYSTEMMENUMODE)) != 0) {
+    return true;
   }
 
-  RECT rect = GetHotZoneRect();
-  SetWindowPos(hotZone_, HWND_TOPMOST,
-    rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top,
-    SWP_SHOWWINDOW | SWP_NOACTIVATE);
+  // A modal dialog owned by the panel (message box, error report) also owns the
+  // interaction; sliding the panel away underneath it is never what the user
+  // wants.
+  HWND active = GetActiveWindow();
+  if (active && active != hwnd_ && GetWindow(active, GW_OWNER) == hwnd_) {
+    return true;
+  }
+  return false;
 }
 
 void App::CommitVisibleRect(const RECT& rect, bool detectDock) {
@@ -2211,13 +2269,21 @@ void App::RequestExpand(bool activate) {
   if (!IsDocked()) {
     state_.expanded = true;
     ShowMainWindow(activate);
-    SyncHotZone();
     SaveState();
     return;
   }
 
-  if (state_.expanded && IsWindowVisible(hwnd_)) {
+  if (state_.expanded && IsWindowVisible(hwnd_) && !animation_.active) {
     ShowMainWindow(activate);
+    return;
+  }
+
+  // A collapse animation may still be running: restart the expand animation
+  // from wherever the panel currently is instead of leaving it mid-way.
+  if (animation_.active && !animation_.expand) {
+    revealArmed_ = false;
+    lastPointerInsideTick_ = GetTickCount64();
+    BeginAnimation(true, activate);
     return;
   }
 
@@ -2228,6 +2294,10 @@ void App::RequestExpand(bool activate) {
     SWP_NOACTIVATE | SWP_SHOWWINDOW);
   suppressWindowTracking_ = false;
   ShowMainWindow(false);
+  // The pointer is still on the edge right now; without disarming here the
+  // freshly opened panel would auto-hide again as soon as the delay expires.
+  revealArmed_ = false;
+  lastPointerInsideTick_ = GetTickCount64();
   BeginAnimation(true, activate);
 }
 
@@ -2241,6 +2311,8 @@ void App::BeginAnimation(bool expand, bool activateOnFinish) {
     if (activateOnFinish) animation_.activateOnFinish = true;
     return;
   }
+  // Remember which display the panel is docked to while it is still on screen.
+  UpdateDockMonitor();
   KillTimer(hwnd_, kAnimationTimerId);
   animation_.active = true;
   animation_.expand = expand;
@@ -2299,30 +2371,64 @@ void App::FinishAnimation() {
     SetTaskbarVisible(false);
     SaveState();
   }
-  SyncHotZone();
+  // Whatever happened, the pointer has to leave the edge neighbourhood before
+  // it may reveal/hide the window again. This is what stops the bang-bang
+  // open/close loop when the cursor rests on the dock edge.
+  revealArmed_ = false;
 }
 
-bool App::IsPointerInsideRect(const RECT& rect) const {
-  POINT pt{};
-  GetCursorPos(&pt);
-  return PtInRect(&rect, pt) != FALSE;
+RECT App::GetPointerHitRect() const {
+  RECT rect{};
+  if (!hwnd_ || !GetWindowRect(hwnd_, &rect)) return rect;
+  // Inflate a little so hairline gaps between the frame and the client area,
+  // plus a one-pixel cursor jitter, do not count as "pointer left the panel".
+  const int pad = std::clamp(ScaleDip(hwnd_, kPointerHitPaddingDip), 0, 32);
+  if (pad > 0) InflateRect(&rect, pad, pad);
+  return rect;
 }
 
 void App::PollAutoHide() {
-  if (trayHidden_ || inMoveSize_ || animation_.active || !state_.expanded || !IsDocked() || !IsWindowVisible(hwnd_)) {
+  if (trayHidden_ || inMoveSize_ || animation_.active || !IsDocked() ||
+      !hwnd_ || !IsWindowVisible(hwnd_) || IsIconic(hwnd_)) {
     return;
   }
 
-  RECT mainRect{};
-  GetWindowRect(hwnd_, &mainRect);
-  const ULONGLONG now = GetTickCount64();
-  if (IsPointerInsideRect(mainRect)) {
-    lastPointerInsideTick_ = now;
+  POINT pt{};
+  if (!GetCursorPos(&pt)) return;
+
+  if (state_.expanded) {
+    const RECT hit = GetPointerHitRect();
+    const bool pointerInside = PtInRect(&hit, pt) != FALSE;
+    // An open menu/context menu keeps the panel up regardless of the pointer.
+    if (pointerInside || IsMenuModeActive()) {
+      lastPointerInsideTick_ = GetTickCount64();
+      return;
+    }
+    if (GetTickCount64() - lastPointerInsideTick_ >= kAutoHideDelayMs) {
+      RequestCollapse();
+    }
     return;
   }
 
-  if (now - lastPointerInsideTick_ >= kAutoHideDelayMs) {
-    RequestCollapse();
+  const RECT reveal = GetRevealRect();
+  if (reveal.right <= reveal.left || reveal.bottom <= reveal.top) {
+    revealArmed_ = false;
+    return;
+  }
+
+  if (PtInRect(&reveal, pt)) {
+    if (revealArmed_ && !IsMenuModeActive()) {
+      revealArmed_ = false;
+      RequestExpand(false);
+    }
+    return;
+  }
+
+  // Re-arm only once the pointer has clearly moved away from the dock edge, so
+  // a cursor parked on the edge cannot make the panel flicker in and out.
+  const int rearm = std::clamp(ScaleDip(hwnd_, kRevealRearmMarginDip), 1, 4000);
+  if (DistanceFromDockEdge(pt) > rearm) {
+    revealArmed_ = true;
   }
 }
 
@@ -2330,9 +2436,11 @@ void App::ApplySavedGeometry() {
   state_.version = 4;
   if (state_.w <= 0) state_.w = 420;
   if (state_.h <= 0) state_.h = 640;
+  UpdateDockMonitor();
   state_.dockEdge = static_cast<int>(NormalizeDockEdge(static_cast<DockEdge>(state_.dockEdge)));
   RECT rect = GetExpandedRect();
   CommitVisibleRect(rect, true);
+  UpdateDockMonitor();
   RECT target = state_.expanded && !trayHidden_ ? GetExpandedRect() : GetCollapsedRect();
   suppressWindowTracking_ = true;
   SetWindowPos(hwnd_, HWND_TOPMOST, target.left, target.top, target.right - target.left, target.bottom - target.top,
@@ -2341,7 +2449,8 @@ void App::ApplySavedGeometry() {
   if (!state_.expanded) {
     SetTaskbarVisible(false);
   }
-  SyncHotZone();
+  revealArmed_ = false;
+  lastPointerInsideTick_ = GetTickCount64();
 }
 
 void App::CreateControls() {

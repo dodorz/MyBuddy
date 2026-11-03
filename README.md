@@ -20,6 +20,14 @@ cmake --build --preset vs-x64-release
 - `state.dat` is for runtime state only.
 - Start from [config.ini.example](/C:/~/%5CProjects%5CMyBuddy%5Cconfig.ini.example).
 
+## Edge docking
+
+- Drag the window close to a screen edge to dock it; dragging it away undocks it.
+- When docked, leaving the pointer outside the panel for a moment slides it out of the way.
+- Moving the pointer to the docked edge of the screen slides it back.
+- The edge is resolved against the display the window was docked to, so a parked panel does not react to the wrong monitor in multi-monitor setups.
+- Open menus and modal dialogs keep the panel on screen.
+
 ## Notes
 
 - Notes are configured from `config.ini`.

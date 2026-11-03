@@ -123,10 +123,8 @@ private:
   };
 
   static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
-  static LRESULT CALLBACK HotZoneWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
   static LRESULT CALLBACK ListBoxProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
   LRESULT HandleMainMessage(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
-  LRESULT HandleHotZoneMessage(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
   LRESULT HandleListBoxMessage(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
 
   bool LoadConfig();
@@ -141,17 +139,21 @@ private:
   void ActivateMainWindow();
   void ApplySavedGeometry();
   void SetTaskbarVisible(bool visible);
-  void CreateHotZoneWindow();
-  void DestroyHotZoneWindow();
   DockEdge GetTaskbarDockEdge() const;
   DockEdge GetFallbackDockEdge() const;
   DockEdge NormalizeDockEdge(DockEdge edge) const;
+  HMONITOR GetDockMonitor() const;
+  void UpdateDockMonitor();
+  void ResyncDockGeometry();
+  DockEdge GetDockEdge() const;
   RECT GetWorkArea() const;
   RECT GetExpandedRect() const;
   RECT GetCollapsedRect() const;
-  RECT GetHotZoneRect() const;
+  RECT GetRevealRect() const;
+  RECT GetPointerHitRect() const;
+  int DistanceFromDockEdge(POINT pt) const;
+  bool IsMenuModeActive() const;
   void UpdateDockEdgeFromRect(RECT& rect);
-  void SyncHotZone();
   void RequestExpand(bool activate);
   void RequestCollapse();
   void BeginAnimation(bool expand, bool activateOnFinish);
@@ -159,7 +161,6 @@ private:
   void FinishAnimation();
   void CommitVisibleRect(const RECT& rect, bool detectDock);
   bool IsDocked() const;
-  bool IsPointerInsideRect(const RECT& rect) const;
   void PollAutoHide();
 
   void CreateControls();
@@ -243,7 +244,6 @@ private:
   HINSTANCE instance_ = nullptr;
   HANDLE singleInstanceMutex_ = nullptr;
   HWND hwnd_ = nullptr;
-  HWND hotZone_ = nullptr;
   HWND listBox_ = nullptr;
   HWND toolbarTooltip_ = nullptr;
   HWND listTooltip_ = nullptr;
@@ -274,11 +274,12 @@ private:
   bool trayIconAdded_ = false;
   bool hotKeyBusy_ = false;
   Animation animation_{};
+  HMONITOR dockMonitor_ = nullptr;
   ULONGLONG lastPointerInsideTick_ = 0;
+  bool revealArmed_ = true;
   bool suppressWindowTracking_ = false;
   bool inMoveSize_ = false;
    bool trayHidden_ = false;
-   bool hotZoneVisible_ = false;
    bool stateLoaded_ = false;
    bool listTooltipActive_ = false;
    int currentRowIndex_ = -1;
