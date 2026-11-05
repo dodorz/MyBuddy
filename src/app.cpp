@@ -24,6 +24,7 @@ constexpr UINT kHotKeyBaseId = 0xB100;
 constexpr UINT kAutoHideTimerId = 5001;
 constexpr UINT kAnimationTimerId = 5002;
 constexpr UINT kAutoRefreshTimerId = 5003;
+constexpr UINT kDeferredInitTimerId = 5004;
 constexpr UINT kTrayIconId = 1001;
 constexpr UINT kTrayOpenCmd = 2001;
 constexpr UINT kTrayExitCmd = 2002;
@@ -957,6 +958,19 @@ MarkdownLine ParseMarkdownLine(const std::wstring& text) {
   return line;
 }
 
+// The same list rows are repainted on every scroll, hover and selection change.
+// Parsing the markdown again each time shows up as lag, so keep the last parse
+// per line text in a small bounded cache.
+constexpr size_t kMarkdownLineCacheLimit = 4096;
+
+const MarkdownLine& ParseMarkdownLineCached(const std::wstring& text) {
+  static std::unordered_map<std::wstring, MarkdownLine> cache;
+  auto it = cache.find(text);
+  if (it != cache.end()) return it->second;
+  if (cache.size() >= kMarkdownLineCacheLimit) cache.clear();
+  return cache.emplace(text, ParseMarkdownLine(text)).first->second;
+}
+
 bool BuildGroupSourceFile(const NoteGroupConfig& group, NoteFile& file) {
   if (!IsSingleFileLineGroupType(group.type)) return false;
   WIN32_FILE_ATTRIBUTE_DATA data{};
@@ -1407,6 +1421,9 @@ LRESULT CALLBACK App::ListBoxProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 LRESULT App::HandleMainMessage(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
   switch (msg) {
     case WM_CREATE: {
+      // Only the work needed to paint the first frame happens here. Loading
+      // the note lists, reading note files and setting up filesystem watchers
+      // runs on the first idle pass so the window appears earlier.
       LoadConfig();
       stateLoaded_ = LoadState();
       if (!stateLoaded_) {
@@ -1415,13 +1432,40 @@ LRESULT App::HandleMainMessage(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
       ApplyHotKeys();
       CreateFonts();
       CreateControls();
+      // Placeholder so the first frame is never an empty list while the real
+      // contents are prepared on the idle pass below.
+      globalStatusMessage_ = L"Loading notes...";
+      RebuildVisibleRows();
       ApplySavedGeometry();
-      RefreshNotes();
       lastPointerInsideTick_ = GetTickCount64();
-      SetTimer(hwnd_, kAutoHideTimerId, kAutoHidePollMs, nullptr);
-      SetTimer(hwnd_, kAutoRefreshTimerId, kAutoRefreshPollMs, nullptr);
+      SetTimer(hwnd_, kDeferredInitTimerId, 1, nullptr);
       return 0;
     }
+    case WM_TIMER:
+      if (wp == kDeferredInitTimerId) {
+        KillTimer(hwnd_, kDeferredInitTimerId);
+        if (pendingInitialLoad_) {
+          pendingInitialLoad_ = false;
+          RefreshNotes();
+        }
+        SetTimer(hwnd_, kAutoHideTimerId, kAutoHidePollMs, nullptr);
+        SetTimer(hwnd_, kAutoRefreshTimerId, kAutoRefreshPollMs, nullptr);
+        return 0;
+      }
+      if (wp == kAnimationTimerId) {
+        TickAnimation();
+        return 0;
+      }
+      if (wp == kAutoHideTimerId) {
+        PollAutoHide();
+        return 0;
+      }
+      if (wp == kAutoRefreshTimerId) {
+        PollAutoRefreshWatchers();
+        PollPendingNoteEditors();
+        return 0;
+      }
+      return 0;
     case WM_SIZE:
       LayoutControls();
       return 0;
@@ -1531,21 +1575,6 @@ LRESULT App::HandleMainMessage(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
       }
       break;
     }
-    case WM_TIMER:
-      if (wp == kAnimationTimerId) {
-        TickAnimation();
-        return 0;
-      }
-      if (wp == kAutoHideTimerId) {
-        PollAutoHide();
-        return 0;
-      }
-      if (wp == kAutoRefreshTimerId) {
-        PollAutoRefreshWatchers();
-        PollPendingNoteEditors();
-        return 0;
-      }
-      return 0;
     case WM_CONTEXTMENU:
       if (reinterpret_cast<HWND>(wp) == listBox_) {
         POINT screenPt{ GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
@@ -1563,6 +1592,7 @@ LRESULT App::HandleMainMessage(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_EXITSIZEMOVE: {
       inMoveSize_ = false;
       if (animation_.active || suppressWindowTracking_) return 0;
+      InvalidateDockGeometryCache();
       RECT r{};
       GetWindowRect(hwnd_, &r);
       CommitVisibleRect(r, true);
@@ -1573,6 +1603,8 @@ LRESULT App::HandleMainMessage(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     }
     case WM_MOVE: {
       if (animation_.active || suppressWindowTracking_ || inMoveSize_ || !state_.expanded || trayHidden_) return 0;
+      // Dragging can cross monitors, so the cached work area must be re-read.
+      InvalidateDockGeometryCache();
       RECT r{};
       GetWindowRect(hwnd_, &r);
       CommitVisibleRect(r, false);
@@ -1596,6 +1628,7 @@ LRESULT App::HandleMainMessage(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
       ShowToTray();
       return 0;
     case WM_DESTROY:
+      KillTimer(hwnd_, kDeferredInitTimerId);
       KillTimer(hwnd_, kAnimationTimerId);
       KillTimer(hwnd_, kAutoHideTimerId);
       KillTimer(hwnd_, kAutoRefreshTimerId);
@@ -1854,12 +1887,11 @@ bool App::LoadConfig() {
   }
   toolbarButtons_ = std::move(loadedToolbarButtons);
 
+  // The file is already parsed; hand the same IniFile to the notes parser
+  // instead of decoding and tokenizing config.ini a second time.
   NotesConfig loadedNotesConfig{};
-  if (LoadNotesConfig(path, loadedNotesConfig)) {
-    notesConfig_ = std::move(loadedNotesConfig);
-  } else {
-    notesConfig_ = NotesConfig{};
-  }
+  LoadNotesConfigFromIni(ini, loadedNotesConfig);
+  notesConfig_ = std::move(loadedNotesConfig);
   if (hwnd_ && listBox_) {
     CreateToolbarButtons();
     LayoutControls();
@@ -1973,6 +2005,14 @@ HMONITOR App::GetDockMonitor() const {
 void App::UpdateDockMonitor() {
   dockMonitor_ = nullptr;
   dockMonitor_ = GetDockMonitor();
+  // Monitor, work area and taskbar placement all derive from the dock monitor;
+  // re-resolve them lazily the next time they are needed.
+  InvalidateDockGeometryCache();
+}
+
+void App::InvalidateDockGeometryCache() const {
+  workAreaValid_ = false;
+  taskbarEdgeValid_ = false;
 }
 
 void App::ResyncDockGeometry() {
@@ -1996,29 +2036,40 @@ void App::ResyncDockGeometry() {
 }
 
 RECT App::GetWorkArea() const {
+  // GetWorkArea() is on the 20 Hz auto-hide path; the monitor work area only
+  // changes on display/taskbar events, which already invalidate this cache.
+  if (workAreaValid_) return cachedWorkArea_;
+
   HMONITOR monitor = GetDockMonitor();
   if (!monitor) monitor = MonitorFromWindow(hwnd_ ? hwnd_ : GetDesktopWindow(), MONITOR_DEFAULTTONEAREST);
   MONITORINFO info{ sizeof(info) };
   GetMonitorInfoW(monitor, &info);
-  return info.rcWork;
+  cachedWorkArea_ = info.rcWork;
+  workAreaValid_ = true;
+  return cachedWorkArea_;
 }
 
 App::DockEdge App::GetTaskbarDockEdge() const {
+  // Shell app-bar queries are slow enough to matter on the polling path, and
+  // the taskbar position only changes together with the work area.
+  if (taskbarEdgeValid_) return cachedTaskbarEdge_;
+
+  DockEdge edge = DockEdge::Bottom;
   APPBARDATA abd{};
   abd.cbSize = sizeof(abd);
   abd.hWnd = FindWindowW(L"Shell_TrayWnd", nullptr);
-  if (!abd.hWnd || SHAppBarMessage(ABM_GETTASKBARPOS, &abd) == 0) {
-    return DockEdge::Bottom;
+  if (abd.hWnd && SHAppBarMessage(ABM_GETTASKBARPOS, &abd) != 0) {
+    switch (abd.uEdge) {
+      case ABE_LEFT: edge = DockEdge::Left; break;
+      case ABE_RIGHT: edge = DockEdge::Right; break;
+      case ABE_TOP: edge = DockEdge::Top; break;
+      case ABE_BOTTOM:
+      default: edge = DockEdge::Bottom; break;
+    }
   }
-
-  switch (abd.uEdge) {
-    case ABE_LEFT: return DockEdge::Left;
-    case ABE_RIGHT: return DockEdge::Right;
-    case ABE_TOP: return DockEdge::Top;
-    case ABE_BOTTOM:
-    default:
-      return DockEdge::Bottom;
-  }
+  cachedTaskbarEdge_ = edge;
+  taskbarEdgeValid_ = true;
+  return edge;
 }
 
 App::DockEdge App::GetFallbackDockEdge() const {
@@ -2625,8 +2676,21 @@ void App::LayoutControls() {
   if (listBox_) {
     const int listWidth = static_cast<int>(rc.right - rc.left);
     const int listHeight = std::max(0, static_cast<int>(rc.bottom - rc.top) - toolbarHeight);
-    MoveWindow(listBox_, 0, toolbarHeight, listWidth, listHeight, TRUE);
-    RedrawWindow(listBox_, nullptr, nullptr, RDW_ERASE | RDW_INVALIDATE | RDW_UPDATENOW);
+    // Skip the synchronous repaint when the geometry did not change: the view
+    // is already invalidated by the message that triggered the layout.
+    POINT target{ 0, toolbarHeight };
+    ClientToScreen(hwnd_, &target);
+    RECT current{};
+    bool resized = true;
+    if (GetWindowRect(listBox_, &current)) {
+      resized = current.left != target.x || current.top != target.y ||
+                (current.right - current.left) != listWidth ||
+                (current.bottom - current.top) != listHeight;
+    }
+    MoveWindow(listBox_, 0, toolbarHeight, listWidth, listHeight, resized);
+    if (resized) {
+      RedrawWindow(listBox_, nullptr, nullptr, RDW_ERASE | RDW_INVALIDATE | RDW_UPDATENOW);
+    }
   }
 }
 
@@ -2694,9 +2758,12 @@ void App::RebuildAutoRefreshWatchers() {
       }
     }
     addWatcher(watchPath, i, false);
-    if (group.type == NoteGroupType::Directory && group.showSubdir) {
-      for (const std::wstring& subdirPath : EnumerateDirectSubdirectories(group)) {
-        addWatcher(subdirPath, i, false);
+    // Only watch subdirectories that are actually displayed; this keeps the
+    // watcher count (and startup handle work) proportional to what is visible.
+    if (group.type == NoteGroupType::Directory && group.showSubdir &&
+        i < static_cast<int>(subdirsByGroup_.size())) {
+      for (const SubdirEntry& entry : subdirsByGroup_[i]) {
+        if (entry.visible) addWatcher(entry.path, i, false);
       }
     }
   }
@@ -2755,6 +2822,11 @@ void App::ProcessPendingAutoRefreshes() {
     bool showAll = groupIndex < static_cast<int>(showAllGroups_.size()) && showAllGroups_[groupIndex];
     LoadNoteFiles(notesConfig_.groups[groupIndex], notesByGroup_[groupIndex], &state, showAll);
     groupStates_[groupIndex] = state;
+    if (groupIndex < static_cast<int>(subdirsByGroup_.size())) {
+      for (int i = 0; i < static_cast<int>(subdirsByGroup_[groupIndex].size()); ++i) {
+        if (subdirsByGroup_[groupIndex][i].filesLoaded) LoadSubdirEntryFiles(groupIndex, i);
+      }
+    }
   }
 
   RebuildVisibleRows();
@@ -2762,14 +2834,17 @@ void App::ProcessPendingAutoRefreshes() {
 }
 
 void App::RefreshNotes(const std::unordered_map<std::wstring, bool>* expandedStateByGroupId) {
+  const bool reloading = expandedStateByGroupId != nullptr;
   std::unordered_map<std::wstring, bool> showAllStateByGroupId;
-  std::unordered_map<std::wstring, std::unordered_map<std::wstring, bool>> subdirExpandedStateByGroupId;
+  std::unordered_map<std::wstring, SubdirLoadHints> subdirHintsByGroupId;
   const int oldCount = static_cast<int>(std::min(notesConfig_.groups.size(), showAllGroups_.size()));
   for (int i = 0; i < oldCount; ++i) {
     showAllStateByGroupId[notesConfig_.groups[i].id] = showAllGroups_[i];
     if (i < static_cast<int>(subdirsByGroup_.size())) {
+      SubdirLoadHints& hints = subdirHintsByGroupId[notesConfig_.groups[i].id];
+      hints.loadExpandedFiles = reloading;
       for (const SubdirEntry& entry : subdirsByGroup_[i]) {
-        subdirExpandedStateByGroupId[notesConfig_.groups[i].id][entry.path] = entry.expanded;
+        hints.expandedByPath[entry.path] = entry.expanded;
       }
     }
   }
@@ -2802,9 +2877,9 @@ void App::RefreshNotes(const std::unordered_map<std::wstring, bool>* expandedSta
     expandedGroups_.push_back(expanded);
     showAllGroups_.push_back(showAll);
     subdirsByGroup_.push_back({});
-    const auto subdirIt = subdirExpandedStateByGroupId.find(group.id);
+    const auto hintsIt = subdirHintsByGroupId.find(group.id);
     LoadSubdirEntriesForGroup(static_cast<int>(subdirsByGroup_.size()) - 1,
-      subdirIt != subdirExpandedStateByGroupId.end() ? &subdirIt->second : nullptr);
+      hintsIt != subdirHintsByGroupId.end() ? &hintsIt->second : nullptr);
   }
   RebuildVisibleRows();
   RebuildAutoRefreshWatchers();
@@ -2826,20 +2901,21 @@ void App::RefreshGroup(int groupIndex) {
   if (groupIndex < 0 || groupIndex >= static_cast<int>(notesConfig_.groups.size())) return;
   NoteGroupLoadState state = NoteGroupLoadState::Ok;
   bool showAll = groupIndex < static_cast<int>(showAllGroups_.size()) && showAllGroups_[groupIndex];
-  std::unordered_map<std::wstring, bool> subdirExpandedStateByPath;
+  SubdirLoadHints hints{};
+  hints.loadExpandedFiles = true;
   if (groupIndex < static_cast<int>(subdirsByGroup_.size())) {
     for (const SubdirEntry& entry : subdirsByGroup_[groupIndex]) {
-      subdirExpandedStateByPath[entry.path] = entry.expanded;
+      hints.expandedByPath[entry.path] = entry.expanded;
     }
   }
   LoadNoteFiles(notesConfig_.groups[groupIndex], notesByGroup_[groupIndex], &state, showAll);
   groupStates_[groupIndex] = state;
-  LoadSubdirEntriesForGroup(groupIndex, &subdirExpandedStateByPath);
+  LoadSubdirEntriesForGroup(groupIndex, &hints);
   RebuildVisibleRows();
   RebuildAutoRefreshWatchers();
 }
 
-void App::LoadSubdirEntriesForGroup(int groupIndex, const std::unordered_map<std::wstring, bool>* expandedStateByPath) {
+void App::LoadSubdirEntriesForGroup(int groupIndex, const SubdirLoadHints* hints) {
   if (groupIndex < 0 || groupIndex >= static_cast<int>(notesConfig_.groups.size())) return;
   if (groupIndex >= static_cast<int>(subdirsByGroup_.size())) {
     subdirsByGroup_.resize(notesConfig_.groups.size());
@@ -2847,13 +2923,24 @@ void App::LoadSubdirEntriesForGroup(int groupIndex, const std::unordered_map<std
 
   std::vector<SubdirEntry> entries;
   const NoteGroupConfig& group = notesConfig_.groups[groupIndex];
-  if (group.type != NoteGroupType::Directory || !group.showSubdir) {
+  if (group.type != NoteGroupType::Directory) {
     subdirsByGroup_[groupIndex].clear();
     return;
   }
 
+  // Hidden (showSubdir=0) entries are kept so the user's expansion survives a
+  // config toggle, but they are not listed or loaded.
+  std::unordered_map<std::wstring, bool> previousExpanded;
+  if (!hints) {
+    previousExpanded.reserve(subdirsByGroup_[groupIndex].size());
+    for (const SubdirEntry& old : subdirsByGroup_[groupIndex]) {
+      previousExpanded[old.path] = old.expanded;
+    }
+  }
+
   for (const std::wstring& subdirPath : EnumerateDirectSubdirectories(group)) {
     SubdirEntry entry{};
+    entry.visible = group.showSubdir;
     entry.path = subdirPath;
     size_t slash = subdirPath.find_last_of(L"\\/");
     entry.name = slash == std::wstring::npos ? subdirPath : subdirPath.substr(slash + 1);
@@ -2863,20 +2950,38 @@ void App::LoadSubdirEntriesForGroup(int groupIndex, const std::unordered_map<std
       entry.name = slash2 == std::wstring::npos ? trimmed : trimmed.substr(slash2 + 1);
     }
 
-    if (expandedStateByPath) {
-      if (auto it = expandedStateByPath->find(entry.path); it != expandedStateByPath->end()) {
-        entry.expanded = it->second;
-      }
+    const auto& expandedState = hints ? hints->expandedByPath : previousExpanded;
+    if (auto it = expandedState.find(entry.path); it != expandedState.end()) {
+      entry.expanded = it->second;
     }
 
-    NoteGroupConfig subdirGroup = group;
-    subdirGroup.path = entry.path;
-    subdirGroup.showSubdir = false;
-    LoadNoteFiles(subdirGroup, entry.files, &entry.state, false);
     entries.push_back(std::move(entry));
   }
 
   subdirsByGroup_[groupIndex] = std::move(entries);
+
+  // Reloads and explicit refreshes repaint immediately; startup only lists the
+  // directories and loads each listing when the user expands it.
+  if (!hints || !hints->loadExpandedFiles) return;
+  for (int i = 0; i < static_cast<int>(subdirsByGroup_[groupIndex].size()); ++i) {
+    const SubdirEntry& entry = subdirsByGroup_[groupIndex][i];
+    if (entry.visible && entry.expanded) LoadSubdirEntryFiles(groupIndex, i);
+  }
+}
+
+void App::LoadSubdirEntryFiles(int groupIndex, int subdirIndex) {
+  if (groupIndex < 0 || groupIndex >= static_cast<int>(notesConfig_.groups.size())) return;
+  if (groupIndex >= static_cast<int>(subdirsByGroup_.size())) return;
+  if (subdirIndex < 0 || subdirIndex >= static_cast<int>(subdirsByGroup_[groupIndex].size())) return;
+
+  SubdirEntry& entry = subdirsByGroup_[groupIndex][subdirIndex];
+  if (!entry.visible || entry.filesLoaded) return;
+
+  NoteGroupConfig subdirGroup = notesConfig_.groups[groupIndex];
+  subdirGroup.path = entry.path;
+  subdirGroup.showSubdir = false;
+  LoadNoteFiles(subdirGroup, entry.files, &entry.state, false);
+  entry.filesLoaded = true;
 }
 
 const NoteFile* App::GetGroupFile(int groupIndex, int subdirIndex, int fileIndex) const {
@@ -2914,7 +3019,16 @@ void App::RebuildVisibleRows() {
     visibleRows_.push_back({VisibleRow::Type::Group, i, -1, -1});
     if (!expandedGroups_[i]) continue;
     if (groupStates_[i] != NoteGroupLoadState::Ok || notesByGroup_[i].empty()) {
-      if (!(i < static_cast<int>(subdirsByGroup_.size()) && !subdirsByGroup_[i].empty())) {
+      bool hasVisibleSubdir = false;
+      if (i < static_cast<int>(subdirsByGroup_.size())) {
+        for (const SubdirEntry& subdir : subdirsByGroup_[i]) {
+          if (subdir.visible) {
+            hasVisibleSubdir = true;
+            break;
+          }
+        }
+      }
+      if (!hasVisibleSubdir) {
         visibleRows_.push_back({VisibleRow::Type::GroupMessage, i, -1, -1});
       }
     }
@@ -2923,22 +3037,38 @@ void App::RebuildVisibleRows() {
     }
     if (i < static_cast<int>(subdirsByGroup_.size())) {
       for (int j = 0; j < static_cast<int>(subdirsByGroup_[i].size()); ++j) {
+        const SubdirEntry& subdir = subdirsByGroup_[i][j];
+        if (!subdir.visible) continue;
         visibleRows_.push_back({VisibleRow::Type::Subdir, i, j, -1});
-        if (!subdirsByGroup_[i][j].expanded) continue;
-        if (subdirsByGroup_[i][j].state != NoteGroupLoadState::Ok || subdirsByGroup_[i][j].files.empty()) {
+        if (!subdir.expanded) continue;
+        if (!subdir.filesLoaded || subdir.state != NoteGroupLoadState::Ok || subdir.files.empty()) {
           continue;
         }
-        for (int k = 0; k < static_cast<int>(subdirsByGroup_[i][j].files.size()); ++k) {
+        for (int k = 0; k < static_cast<int>(subdir.files.size()); ++k) {
           visibleRows_.push_back({VisibleRow::Type::File, i, j, k});
         }
       }
     }
   }
 
-  SendMessageW(listBox_, WM_SETREDRAW, FALSE, 0);
-  SendMessageW(listBox_, LB_RESETCONTENT, 0, 0);
-  for (size_t i = 0; i < visibleRows_.size(); ++i) {
-    SendMessageW(listBox_, LB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L""));
+  // The list is owner-drawn and only the row count matters. Adjusting just the
+  // difference keeps group toggles and refreshes from replaying a full
+  // LB_RESETCONTENT + N x LB_ADDSTRING cycle for every row.
+  size_t previousCount = 0;
+  if (listBox_) {
+    LRESULT count = SendMessageW(listBox_, LB_GETCOUNT, 0, 0);
+    if (count != LB_ERR) previousCount = static_cast<size_t>(count);
+  }
+  if (previousCount != visibleRows_.size()) {
+    SendMessageW(listBox_, WM_SETREDRAW, FALSE, 0);
+    while (previousCount > visibleRows_.size()) {
+      SendMessageW(listBox_, LB_DELETESTRING, previousCount - 1, 0);
+      --previousCount;
+    }
+    for (; previousCount < visibleRows_.size(); ++previousCount) {
+      SendMessageW(listBox_, LB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L""));
+    }
+    SendMessageW(listBox_, WM_SETREDRAW, TRUE, 0);
   }
   if (!visibleRows_.empty()) {
     topIndex = std::clamp(topIndex, 0, static_cast<int>(visibleRows_.size()) - 1);
@@ -2949,14 +3079,16 @@ void App::RebuildVisibleRows() {
   } else {
     currentRowIndex_ = -1;
   }
-  SendMessageW(listBox_, WM_SETREDRAW, TRUE, 0);
   InvalidateList();
   UpdateToolbarButtons();
 }
 
 void App::InvalidateList() {
   if (listBox_) {
-    RedrawWindow(listBox_, nullptr, nullptr, RDW_ERASE | RDW_INVALIDATE | RDW_UPDATENOW);
+    // Leave the actual repaint to the normal paint cycle: forcing a synchronous
+    // update here repaints the whole list on every rebuild (including each
+    // group toggle and lazy subdirectory load).
+    RedrawWindow(listBox_, nullptr, nullptr, RDW_ERASE | RDW_INVALIDATE);
   }
 }
 
@@ -3084,18 +3216,18 @@ void App::DrawListItem(const DRAWITEMSTRUCT* dis) {
   RECT rc = dis->rcItem;
   HFONT oldFont = reinterpret_cast<HFONT>(SelectObject(dc, fontBody_));
 
-   const COLORREF bgColor =
-     row.type == VisibleRow::Type::Group ? RGB(240, 244, 248) :
-     (row.type == VisibleRow::Type::Subdir ? RGB(248, 250, 252) : RGB(255, 255, 255));
-   HBRUSH bg = CreateSolidBrush(bgColor);
-   FillRect(dc, &rc, bg);
-   DeleteObject(bg);
+  // The row brushes are constant; keeping them alive avoids creating and
+  // deleting GDI objects for every visible row on every repaint.
+  static HBRUSH groupBg = CreateSolidBrush(RGB(240, 244, 248));
+  static HBRUSH subdirBg = CreateSolidBrush(RGB(248, 250, 252));
+  static HBRUSH fileBg = CreateSolidBrush(RGB(255, 255, 255));
+  static HBRUSH hoverBg = CreateSolidBrush(RGB(220, 232, 250));
+  FillRect(dc, &rc, row.type == VisibleRow::Type::Group ? groupBg :
+    (row.type == VisibleRow::Type::Subdir ? subdirBg : fileBg));
 
-   if (dis->itemID == hoveredRowIndex_) {
-     HBRUSH hoverBrush = CreateSolidBrush(RGB(220, 232, 250));
-     FillRect(dc, &rc, hoverBrush);
-     DeleteObject(hoverBrush);
-   }
+  if (dis->itemID == hoveredRowIndex_) {
+    FillRect(dc, &rc, hoverBg);
+  }
 
    SetBkMode(dc, TRANSPARENT);
    SetTextColor(dc, RGB(32, 32, 32));
@@ -3165,6 +3297,11 @@ void App::DrawListItem(const DRAWITEMSTRUCT* dis) {
     SelectObject(dc, fontMeta_);
     SetTextColor(dc, RGB(72, 84, 100));
     std::wstring label = subdir.name + L"/";
+    if (subdir.expanded && !subdir.filesLoaded) {
+      // Contents arrive on the next progressive pass; never show a stale empty
+      // directory in the meantime.
+      label += L"...";
+    }
     DrawTextW(dc, label.c_str(), -1, &textRc, DT_SINGLELINE | DT_VCENTER | DT_LEFT | DT_END_ELLIPSIS);
   } else if (row.type == VisibleRow::Type::GroupMessage) {
     RECT textRc = rc;
@@ -3195,7 +3332,7 @@ void App::DrawListItem(const DRAWITEMSTRUCT* dis) {
       nameRc.right = timeRc.right - 32;
       MarkdownCheckbox checkbox = ParseMarkdownCheckbox(displayName);
       if (checkbox.state == MarkdownCheckbox::State::None) {
-        DrawMarkdownLine(dc, nameRc, ParseMarkdownLine(displayName),
+        DrawMarkdownLine(dc, nameRc, ParseMarkdownLineCached(displayName),
           fontBody_, fontBodyBold_, fontBodyItalic_, fontBodyBoldItalic_, fontGroup_, fontBodyBold_);
       } else {
         const int indentWidth = MeasureTextWidth(dc, ExpandTabsForDisplay(checkbox.indent));
@@ -3234,7 +3371,7 @@ void App::DrawListItem(const DRAWITEMSTRUCT* dis) {
         timeRc.left = timeRc.right;
       }
 
-      DrawMarkdownLine(dc, nameRc, ParseMarkdownLine(displayName),
+      DrawMarkdownLine(dc, nameRc, ParseMarkdownLineCached(displayName),
         fontBody_, fontBodyBold_, fontBodyItalic_, fontBodyBoldItalic_, fontGroup_, fontBodyBold_);
       SelectObject(dc, fontMeta_);
       SetTextColor(dc, RGB(96, 104, 116));
@@ -3376,19 +3513,27 @@ bool App::ResolveToolbarContext(const ToolbarButtonConfig& button, int& groupInd
   return false;
 }
 
+bool App::CanResolveToolbarContext(const ToolbarButtonConfig& button) const {
+  if (button.scope == ToolbarScope::Global) return true;
+
+  const int rowIndex = GetCurrentRowIndex();
+  if (rowIndex < 0 || rowIndex >= static_cast<int>(visibleRows_.size())) return false;
+  const VisibleRow& row = visibleRows_[rowIndex];
+  if (row.type == VisibleRow::Type::GlobalMessage) return false;
+  if (row.groupIndex < 0 || row.groupIndex >= static_cast<int>(notesConfig_.groups.size())) return false;
+
+  const NoteGroupConfig& group = notesConfig_.groups[row.groupIndex];
+  if (button.scope == ToolbarScope::Group) return true;
+  if (row.type == VisibleRow::Type::File) return GetVisibleRowFile(row) != nullptr;
+  return IsSingleFileLineGroupType(group.type) && !GetPrimaryGroupActionId(group).empty();
+}
+
 void App::UpdateToolbarButtons() {
+  // Runs on every selection change; avoid copying the group and note configs
+  // for each button just to decide whether it is enabled.
   for (ToolbarButtonConfig& button : toolbarButtons_) {
     if (!button.hwnd) continue;
-    if (button.scope == ToolbarScope::Global) {
-      EnableWindow(button.hwnd, TRUE);
-      continue;
-    }
-
-    int groupIndex = -1;
-    NoteGroupConfig group{};
-    NoteFile file{};
-    const NoteFile* filePtr = nullptr;
-    EnableWindow(button.hwnd, ResolveToolbarContext(button, groupIndex, group, file, filePtr) ? TRUE : FALSE);
+    EnableWindow(button.hwnd, CanResolveToolbarContext(button) ? TRUE : FALSE);
   }
 }
 
@@ -3528,7 +3673,7 @@ int App::ResolveHotKeyGroupIndex(const HotKeyBinding& binding) const {
   return -1;
 }
 
-bool App::FindFileInGroup(int groupIndex, const std::wstring& item, NoteFile& file) const {
+bool App::FindFileInGroup(int groupIndex, const std::wstring& item, NoteFile& file) {
   if (groupIndex < 0 || groupIndex >= static_cast<int>(notesConfig_.groups.size()) || item.empty()) return false;
   const NoteGroupConfig& group = notesConfig_.groups[groupIndex];
 
@@ -3554,8 +3699,11 @@ bool App::FindFileInGroup(int groupIndex, const std::wstring& item, NoteFile& fi
     }
   }
   if (groupIndex < static_cast<int>(subdirsByGroup_.size())) {
-    for (const SubdirEntry& subdir : subdirsByGroup_[groupIndex]) {
-      for (const NoteFile& candidate : subdir.files) {
+    for (int subdirIndex = 0; subdirIndex < static_cast<int>(subdirsByGroup_[groupIndex].size()); ++subdirIndex) {
+      // Subdirectory listings are lazy; materialise them before matching a
+      // hotkey target so behaviour does not depend on what was opened before.
+      LoadSubdirEntryFiles(groupIndex, subdirIndex);
+      for (const NoteFile& candidate : subdirsByGroup_[groupIndex][subdirIndex].files) {
         if (!matches(candidate)) continue;
         file = candidate;
         return true;
@@ -3575,7 +3723,7 @@ bool App::FindFileInGroup(int groupIndex, const std::wstring& item, NoteFile& fi
   return false;
 }
 
-bool App::ResolveHotKeyFile(const HotKeyBinding& binding, int& groupIndex, NoteGroupConfig& group, NoteFile& file) const {
+bool App::ResolveHotKeyFile(const HotKeyBinding& binding, int& groupIndex, NoteGroupConfig& group, NoteFile& file) {
   groupIndex = -1;
   group = NoteGroupConfig{};
   file = NoteFile{};
@@ -4044,7 +4192,14 @@ void App::ToggleGroup(int groupIndex) {
 void App::ToggleSubdir(int groupIndex, int subdirIndex) {
   if (groupIndex < 0 || groupIndex >= static_cast<int>(subdirsByGroup_.size())) return;
   if (subdirIndex < 0 || subdirIndex >= static_cast<int>(subdirsByGroup_[groupIndex].size())) return;
-  subdirsByGroup_[groupIndex][subdirIndex].expanded = !subdirsByGroup_[groupIndex][subdirIndex].expanded;
+  if (!subdirsByGroup_[groupIndex][subdirIndex].visible) return;
+  SubdirEntry& entry = subdirsByGroup_[groupIndex][subdirIndex];
+  entry.expanded = !entry.expanded;
+  if (entry.expanded) {
+    // The listing is only read the first time the entry is opened.
+    LoadSubdirEntryFiles(groupIndex, subdirIndex);
+    if (entry.filesLoaded) RebuildAutoRefreshWatchers();
+  }
   RebuildVisibleRows();
 }
 
@@ -4524,15 +4679,21 @@ void App::RunBlankMenu(POINT screenPt) {
 }
 
 std::wstring App::GetAppDataDir() const {
+  // Startup resolves this path several times (state, config, watchers); the
+  // shell lookup and the directory creation only need to happen once.
+  if (!appDataDirCache_.empty()) return appDataDirCache_;
+
   PWSTR knownPath = nullptr;
   if (FAILED(SHGetKnownFolderPath(FOLDERID_RoamingAppData, 0, nullptr, &knownPath))) {
-    return L".\\";
+    appDataDirCache_ = L".\\";
+    return appDataDirCache_;
   }
   std::wstring dir = EnsureTrailingSlash(knownPath);
   CoTaskMemFree(knownPath);
   dir += L"MyBuddy";
   CreateDirectoryW(dir.c_str(), nullptr);
-  return EnsureTrailingSlash(dir);
+  appDataDirCache_ = EnsureTrailingSlash(dir);
+  return appDataDirCache_;
 }
 
 std::wstring App::GetProgramConfigPath() const {

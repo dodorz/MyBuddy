@@ -139,6 +139,7 @@ sortOrder=desc
 showExtensions=0
 ; Whether dir groups show direct child directories as expandable entries.
 ; Shown child directories are also valid drag-and-drop targets for moving note files.
+; Subdirectory contents are listed when the entry is expanded, which keeps startup fast.
 ; Allowed values: 0, 1. Default: 0
 showSubdir=0
 ; Direct child directory names matching any of these masks are hidden.

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "ini.h"
+
 #include <windows.h>
 
 #include <map>
@@ -93,6 +95,21 @@ struct NotesConfig {
   std::vector<NoteGroupConfig> groups;
 };
 
+// Display-name / pin information decoded once per Markdown file.
+struct MarkdownMetadata {
+  std::wstring title;
+  std::wstring author;
+  // First level-1 heading, used when the front matter has no title.
+  std::wstring headingTitle;
+  bool pinned = false;
+  bool hasFrontMatter = false;
+  bool hasTitle = false;
+  // The probe already covered the whole file, so fallbacks are authoritative.
+  bool scannedWholeFile = false;
+  // The probe found a definitive display name (or covered the whole file).
+  bool nameResolved = false;
+};
+
 struct NoteFile {
   std::wstring path;
   std::wstring dir;
@@ -104,6 +121,9 @@ struct NoteFile {
   FILETIME createdTime{};
   FILETIME modifiedTime{};
   ULONGLONG size = 0;
+  // Front matter already decoded while probing this file; reused by the list
+  // to build the display name without reading the file a second time.
+  MarkdownMetadata metadata{};
 };
 
 struct VisibleRow {
@@ -121,9 +141,13 @@ struct VisibleRow {
   int fileIndex = -1;
 };
 
-bool LoadNotesConfig(const std::wstring& path, NotesConfig& config);
+// Parses the notes sections of an already loaded config file. The startup path
+// loads config.ini once and feeds the same IniFile to both parsers.
+void LoadNotesConfigFromIni(const IniFile& ini, NotesConfig& config);
 void LoadNoteFiles(const NoteGroupConfig& group, std::vector<NoteFile>& files, NoteGroupLoadState* state = nullptr,
   bool ignoreMaxItems = false);
+// Drops cached entries for one path after the app rewrote that note file.
+void InvalidateMarkdownMetadata(const std::wstring& path);
 bool IsMarkdownNoteFile(const NoteFile& file);
 bool IsNoteFilePinned(const NoteFile& file, bool& pinned, std::wstring* errorMessage = nullptr);
 bool SetNoteFilePinned(const NoteFile& file, bool pinned, std::wstring* errorMessage = nullptr);

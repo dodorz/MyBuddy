@@ -40,6 +40,8 @@ cmake --build --preset vs-x64-release
 - Right-click a Markdown file in a dir group and choose `Pin` or `Unpin` to update its front matter.
 - Global shortcuts are configured with `[hotkey.<id>]` sections. They can open notes, create notes from the clipboard, or run group/file actions.
 - The list shows inline status rows for empty groups, missing directories, and missing note-group configuration.
+- Startup paints the window first and fills the note lists right after, so large note directories no longer delay the first frame.
+- `showSubdir` entries list their contents when expanded; `...` marks a listing that is still being read.
 - Notes config reference: [docs/notes-config.md](/C:/~\Projects\MyBuddy\docs\notes-config.md)
 
 ## License

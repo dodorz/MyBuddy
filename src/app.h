@@ -108,6 +108,20 @@ private:
     std::vector<NoteFile> files;
     NoteGroupLoadState state = NoteGroupLoadState::Ok;
     bool expanded = false;
+    // Subdirectory file lists are filled progressively / on demand so that
+    // startup never walks directories the user has not opened.
+    bool filesLoaded = false;
+    // Only shown when showSubdir is on; hidden entries keep their state.
+    bool visible = true;
+  };
+
+  // Carries the previous view of a group's subdirectories across a reload.
+  struct SubdirLoadHints {
+    // Per-path expansion state, still including entries that disappeared.
+    std::unordered_map<std::wstring, bool> expandedByPath{};
+    // Reloads and explicit refreshes restore expanded listings right away;
+    // startup only enumerates the directories and fills files on expand.
+    bool loadExpandedFiles = false;
   };
 
   struct ItemDrag {
@@ -144,6 +158,7 @@ private:
   DockEdge NormalizeDockEdge(DockEdge edge) const;
   HMONITOR GetDockMonitor() const;
   void UpdateDockMonitor();
+  void InvalidateDockGeometryCache() const;
   void ResyncDockGeometry();
   DockEdge GetDockEdge() const;
   RECT GetWorkArea() const;
@@ -182,6 +197,7 @@ private:
   void DrawToolbarButton(const DRAWITEMSTRUCT* dis);
   void UpdateToolbarButtons();
   int GetCurrentRowIndex() const;
+  bool CanResolveToolbarContext(const ToolbarButtonConfig& button) const;
   bool ResolveToolbarContext(const ToolbarButtonConfig& button, int& groupIndex, NoteGroupConfig& group,
     NoteFile& file, const NoteFile*& filePtr) const;
   void RunToolbarButton(size_t index);
@@ -192,8 +208,8 @@ private:
   void ShowHotKeyError(const std::wstring& message);
   int FindGroupIndexById(const std::wstring& id) const;
   int ResolveHotKeyGroupIndex(const HotKeyBinding& binding) const;
-  bool FindFileInGroup(int groupIndex, const std::wstring& item, NoteFile& file) const;
-  bool ResolveHotKeyFile(const HotKeyBinding& binding, int& groupIndex, NoteGroupConfig& group, NoteFile& file) const;
+  bool FindFileInGroup(int groupIndex, const std::wstring& item, NoteFile& file);
+  bool ResolveHotKeyFile(const HotKeyBinding& binding, int& groupIndex, NoteGroupConfig& group, NoteFile& file);
   void RunActionById(const std::wstring& actionId, int groupIndex, const NoteFile* file, bool wait);
   void HandleListLeftClick(POINT pt);
   void HandleListRightClick(POINT pt);
@@ -232,7 +248,8 @@ private:
   void RunBlankMenu(POINT screenPt);
   void ReloadConfigAndRefreshNotes();
   void RefreshGroup(int groupIndex);
-  void LoadSubdirEntriesForGroup(int groupIndex, const std::unordered_map<std::wstring, bool>* expandedStateByPath = nullptr);
+  void LoadSubdirEntriesForGroup(int groupIndex, const SubdirLoadHints* hints = nullptr);
+  void LoadSubdirEntryFiles(int groupIndex, int subdirIndex);
   const NoteFile* GetVisibleRowFile(const VisibleRow& row) const;
   const NoteFile* GetGroupFile(int groupIndex, int subdirIndex, int fileIndex) const;
 
@@ -266,6 +283,7 @@ private:
   std::vector<ToolbarButtonConfig> toolbarButtons_{};
   std::wstring globalStatusMessage_{};
   std::wstring currentConfigPath_{};
+  mutable std::wstring appDataDirCache_{};
   std::wstring listTooltipText_{};
   std::wstring defaultGroupId_;
   std::vector<HotKeyBinding> hotKeys_{};
@@ -275,12 +293,18 @@ private:
   bool hotKeyBusy_ = false;
   Animation animation_{};
   HMONITOR dockMonitor_ = nullptr;
+  mutable RECT cachedWorkArea_{};
+  mutable bool workAreaValid_ = false;
+  mutable DockEdge cachedTaskbarEdge_ = DockEdge::Bottom;
+  mutable bool taskbarEdgeValid_ = false;
   ULONGLONG lastPointerInsideTick_ = 0;
   bool revealArmed_ = true;
   bool suppressWindowTracking_ = false;
   bool inMoveSize_ = false;
    bool trayHidden_ = false;
    bool stateLoaded_ = false;
+   // Notes are loaded on the first idle pass after the window is on screen.
+   bool pendingInitialLoad_ = true;
    bool listTooltipActive_ = false;
    int currentRowIndex_ = -1;
    int hoveredRowIndex_ = -1;

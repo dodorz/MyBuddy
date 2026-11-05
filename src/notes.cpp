@@ -10,6 +10,7 @@
 
 namespace {
 std::wstring Trim(std::wstring value);
+size_t TrimIncompleteUtf8Length(const char* data, size_t len);
 
 std::vector<std::wstring> SplitList(const std::wstring& value, bool preserveEmptyItems = false) {
   std::vector<std::wstring> parts;
@@ -373,63 +374,79 @@ std::wstring SanitizeFileBaseName(std::wstring value) {
   return value;
 }
 
-void TrimIncompleteUtf8(std::string& bytes) {
-  if (bytes.empty()) return;
-  size_t len = bytes.size();
+size_t TrimIncompleteUtf8Length(const char* data, size_t len) {
+  if (len == 0) return 0;
   size_t seqStart = len;
-  while (seqStart > 0 && (static_cast<unsigned char>(bytes[seqStart - 1]) & 0xC0) == 0x80) {
+  while (seqStart > 0 && (static_cast<unsigned char>(data[seqStart - 1]) & 0xC0) == 0x80) {
     --seqStart;
   }
-  if (seqStart == 0) return;
-  unsigned char lead = static_cast<unsigned char>(bytes[seqStart - 1]);
-  int expectedLen;
-  if (lead < 0x80) return;
-  if (lead < 0xC0) return;
+  if (seqStart == 0) return len;
+  unsigned char lead = static_cast<unsigned char>(data[seqStart - 1]);
+  size_t expectedLen;
+  if (lead < 0x80) return len;
+  if (lead < 0xC0) return len;
   if (lead < 0xE0) expectedLen = 2;
   else if (lead < 0xF0) expectedLen = 3;
   else if (lead < 0xF8) expectedLen = 4;
-  else return;
-  int actualLen = static_cast<int>(len - seqStart + 1);
-  if (actualLen < expectedLen) {
-    bytes.resize(seqStart - 1);
-  }
+  else return len;
+  const size_t actualLen = len - seqStart + 1;
+  return actualLen < expectedLen ? seqStart - 1 : len;
 }
 
 std::wstring DecodeTextBytes(const std::string& bytes) {
   if (bytes.empty()) return L"";
-  std::string data(bytes);
-  if (data.size() >= 3 && static_cast<unsigned char>(data[0]) == 0xEF &&
+  const char* data = bytes.data();
+  size_t offset = 0;
+  if (bytes.size() >= 3 && static_cast<unsigned char>(data[0]) == 0xEF &&
       static_cast<unsigned char>(data[1]) == 0xBB &&
       static_cast<unsigned char>(data[2]) == 0xBF) {
-    data.erase(0, 3);
+    offset = 3;
   }
-  TrimIncompleteUtf8(data);
-  int wideLen = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, data.data(), static_cast<int>(data.size()), nullptr, 0);
+  const size_t utf8Len = TrimIncompleteUtf8Length(data + offset, bytes.size() - offset);
+  int wideLen = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, data + offset,
+    static_cast<int>(utf8Len), nullptr, 0);
   if (wideLen > 0) {
-    std::wstring text(wideLen, L'\0');
-    MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, data.data(), static_cast<int>(data.size()), text.data(), wideLen);
+    std::wstring text(static_cast<size_t>(wideLen), L'\0');
+    MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, data + offset, static_cast<int>(utf8Len),
+      text.data(), wideLen);
     return text;
   }
-  wideLen = MultiByteToWideChar(CP_ACP, 0, bytes.data(), static_cast<int>(bytes.size()), nullptr, 0);
+  wideLen = MultiByteToWideChar(CP_ACP, 0, data, static_cast<int>(bytes.size()), nullptr, 0);
   if (wideLen > 0) {
-    std::wstring text(wideLen, L'\0');
-    MultiByteToWideChar(CP_ACP, 0, bytes.data(), static_cast<int>(bytes.size()), text.data(), wideLen);
+    std::wstring text(static_cast<size_t>(wideLen), L'\0');
+    MultiByteToWideChar(CP_ACP, 0, data, static_cast<int>(bytes.size()), text.data(), wideLen);
     return text;
   }
   return L"";
 }
 
+// Reads at most maxBytes (0 means the whole file). The single exact-size read
+// avoids the repeated buffer growth of istreambuf_iterator and shares the file
+// with editors and watchers that may have it open.
 std::wstring ReadTextFilePrefix(const std::wstring& path, size_t maxBytes = 0) {
-  std::ifstream in(path, std::ios::binary);
-  if (!in) return L"";
-  std::string bytes;
-  if (maxBytes == 0) {
-    bytes.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
-  } else {
-    bytes.resize(maxBytes);
-    in.read(bytes.data(), static_cast<std::streamsize>(maxBytes));
-    bytes.resize(static_cast<size_t>(in.gcount()));
+  HANDLE handle = CreateFileW(path.c_str(), GENERIC_READ,
+    FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+    FILE_ATTRIBUTE_NORMAL, nullptr);
+  if (handle == INVALID_HANDLE_VALUE) return L"";
+
+  LARGE_INTEGER fileSize{};
+  if (!GetFileSizeEx(handle, &fileSize)) {
+    CloseHandle(handle);
+    return L"";
   }
+  size_t toRead = fileSize.QuadPart > 0 ? static_cast<size_t>(fileSize.QuadPart) : 0;
+  if (maxBytes != 0 && toRead > maxBytes) toRead = maxBytes;
+
+  std::string bytes(toRead, '\0');
+  size_t readTotal = 0;
+  while (readTotal < toRead) {
+    const DWORD chunk = static_cast<DWORD>(std::min<size_t>(toRead - readTotal, 1u << 30));
+    DWORD readNow = 0;
+    if (!ReadFile(handle, bytes.data() + readTotal, chunk, &readNow, nullptr) || readNow == 0) break;
+    readTotal += readNow;
+  }
+  CloseHandle(handle);
+  bytes.resize(readTotal);
   return DecodeTextBytes(bytes);
 }
 
@@ -439,17 +456,34 @@ std::wstring ReadTextFile(const std::wstring& path) {
 
 std::vector<std::wstring> SplitLines(const std::wstring& text) {
   std::vector<std::wstring> lines;
-  std::wstring current;
-  for (wchar_t ch : text) {
-    if (ch == L'\r') continue;
-    if (ch == L'\n') {
-      lines.push_back(current);
-      current.clear();
-      continue;
-    }
-    current.push_back(ch);
+  size_t lineCount = 1;
+  for (size_t pos = text.find(L'\n'); pos != std::wstring::npos; pos = text.find(L'\n', pos + 1)) {
+    ++lineCount;
   }
-  lines.push_back(current);
+  lines.reserve(lineCount);
+
+  // Carriage returns are dropped wherever they appear, including in the last
+  // line, which has no trailing newline.
+  auto appendLine = [&](size_t begin, size_t count) {
+    if (text.find(L'\r', begin) < begin + count) {
+      std::wstring line = text.substr(begin, count);
+      line.erase(std::remove(line.begin(), line.end(), L'\r'), line.end());
+      lines.push_back(std::move(line));
+    } else {
+      lines.push_back(text.substr(begin, count));
+    }
+  };
+
+  size_t start = 0;
+  while (true) {
+    const size_t end = text.find(L'\n', start);
+    if (end == std::wstring::npos) {
+      appendLine(start, text.size() - start);
+      break;
+    }
+    appendLine(start, end - start);
+    start = end + 1;
+  }
   return lines;
 }
 
@@ -656,56 +690,130 @@ bool IsMarkdownFileName(const std::wstring& name) {
   return towlower(name[dot + 1]) == L'm' && towlower(name[dot + 2]) == L'd';
 }
 
-constexpr size_t kPinnedFrontMatterProbeBytes = 512;
+constexpr size_t kPinnedFrontMatterProbeBytes = 4 * 1024;
 constexpr size_t kPinnedFrontMatterReadBytes = 16 * 1024;
 constexpr size_t kPinnedFrontMatterMaxBytes = 64 * 1024;
 constexpr size_t kPinnedCacheLimit = 32768;
 
-struct PinnedCacheEntry {
+struct MarkdownMetadataCacheEntry {
   FILETIME modifiedTime{};
   ULONGLONG size = 0;
+  bool readOk = false;
   bool pinned = false;
+  bool hasFrontMatter = false;
+  bool scannedWholeFile = false;
+  // True when the probe saw enough of the file to reproduce the display name
+  // the full read would produce.
+  bool nameResolved = false;
+  std::wstring title;
+  std::wstring author;
+  std::wstring headingTitle;
 };
 
-std::unordered_map<std::wstring, PinnedCacheEntry> gPinnedCache;
+std::unordered_map<std::wstring, MarkdownMetadataCacheEntry> gMarkdownMetadataCache;
 
-bool IsMarkdownFilePinned(const NoteFile& file) {
-  auto cached = gPinnedCache.find(file.path);
-  if (cached != gPinnedCache.end() &&
-      CompareFileTime(&cached->second.modifiedTime, &file.modifiedTime) == 0 &&
-      cached->second.size == file.size) {
-    return cached->second.pinned;
+std::wstring FindContentHeadingTitle(const std::vector<std::wstring>& lines, size_t contentStart) {
+  for (size_t i = contentStart; i < lines.size(); ++i) {
+    const std::wstring line = Trim(lines[i]);
+    if (line.rfind(L"# ", 0) == 0) {
+      const std::wstring title = StripMdHeading(line);
+      if (!title.empty()) return title;
+    }
   }
+  size_t firstContentLine = contentStart;
+  while (firstContentLine < lines.size() && Trim(lines[firstContentLine]).empty()) ++firstContentLine;
+  if (firstContentLine < lines.size()) {
+    const std::wstring firstLine = Trim(lines[firstContentLine]);
+    if (firstLine.rfind(L"#", 0) == 0) return StripMdHeading(firstLine);
+  }
+  return L"";
+}
 
-  // Reading just the first line avoids touching most Markdown files that have
-  // no front matter at all. Files that do start with front matter are read in
-  // full only up to the pin parsing limit.
+// Probes one Markdown file once for everything the list needs: pin state,
+// front matter metadata and a display-name hint. Most notes have no front
+// matter and are covered by the initial probe read, so the list no longer
+// reads each Markdown file twice.
+MarkdownMetadataCacheEntry ProbeMarkdownMetadata(const NoteFile& file) {
+  MarkdownMetadataCacheEntry entry{};
+  entry.modifiedTime = file.modifiedTime;
+  entry.size = file.size;
+
   std::wstring head = ReadTextFilePrefix(file.path, kPinnedFrontMatterProbeBytes);
-  bool readOk = !head.empty() || file.size == 0;
-  bool pinned = false;
+  entry.readOk = !head.empty() || file.size == 0;
+  entry.scannedWholeFile = file.size <= kPinnedFrontMatterProbeBytes;
+
   const size_t firstLineEnd = head.find_first_of(L"\r\n");
   const std::wstring firstLine = Trim(head.substr(0, firstLineEnd == std::wstring::npos ? head.size() : firstLineEnd));
-  const bool hasFrontMatter = firstLine == L"+++" || firstLine == L"---";
-  if (hasFrontMatter) {
-    std::wstring text = ReadTextFilePrefix(file.path, kPinnedFrontMatterReadBytes);
-    readOk = readOk && (!text.empty() || file.size == 0);
+  if (firstLine == L"+++" || firstLine == L"---") {
+    entry.hasFrontMatter = true;
+    // The probe may have cut the front matter off; widen the read within the
+    // parsing limits before giving up.
+    std::wstring text = head;
     std::vector<std::wstring> lines = SplitLines(text);
     size_t contentStartLine = 0;
-    if (!TryFindTomlFrontMatter(lines, contentStartLine) && file.size > kPinnedFrontMatterReadBytes) {
-      text = ReadTextFilePrefix(file.path, kPinnedFrontMatterMaxBytes);
-      readOk = readOk && (!text.empty() || file.size == 0);
+    bool found = TryFindTomlFrontMatter(lines, contentStartLine);
+    if (!found && !entry.scannedWholeFile) {
+      text = ReadTextFilePrefix(file.path, kPinnedFrontMatterReadBytes);
+      entry.scannedWholeFile = file.size <= kPinnedFrontMatterReadBytes;
       lines = SplitLines(text);
-      contentStartLine = 0;
+      found = TryFindTomlFrontMatter(lines, contentStartLine);
+      if (!found && file.size > kPinnedFrontMatterReadBytes) {
+        text = ReadTextFilePrefix(file.path, kPinnedFrontMatterMaxBytes);
+        entry.scannedWholeFile = file.size <= kPinnedFrontMatterMaxBytes;
+        lines = SplitLines(text);
+        contentStartLine = 0;
+        found = TryFindTomlFrontMatter(lines, contentStartLine);
+      }
     }
-    pinned = ParseMarkdownFrontMatter(lines, contentStartLine).pinned;
+    const MarkdownFrontMatter metadata = found
+      ? ParseMarkdownFrontMatter(lines, contentStartLine)
+      : MarkdownFrontMatter{};
+    entry.pinned = metadata.pinned;
+    entry.title = metadata.title;
+    entry.author = metadata.author;
+    if (metadata.title.empty()) {
+      // An unterminated front matter block is not front matter: the full read
+      // treats the whole file as content, so the heading scan starts at the
+      // line left in contentStartLine either way.
+      entry.headingTitle = FindContentHeadingTitle(lines, contentStartLine);
+    }
+  } else {
+    entry.headingTitle = FindContentHeadingTitle(SplitLines(head), 0);
   }
 
-  // Avoid caching a transient read failure as a permanent "not pinned" result.
-  if (readOk) {
-    if (gPinnedCache.size() >= kPinnedCacheLimit) gPinnedCache.clear();
-    gPinnedCache[file.path] = PinnedCacheEntry{file.modifiedTime, file.size, pinned};
+  // Front matter titles and level-1 headings are found first by the very same
+  // ordered scan, so a probe that covered the whole file reproduces the full
+  // read exactly. Larger files keep the full read unless a candidate was found.
+  entry.nameResolved = entry.scannedWholeFile ||
+    !entry.title.empty() || !entry.headingTitle.empty();
+  return entry;
+}
+
+const MarkdownMetadataCacheEntry& GetMarkdownMetadata(const NoteFile& file) {
+  auto it = gMarkdownMetadataCache.find(file.path);
+  if (it != gMarkdownMetadataCache.end() &&
+      CompareFileTime(&it->second.modifiedTime, &file.modifiedTime) == 0 &&
+      it->second.size == file.size) {
+    return it->second;
   }
-  return pinned;
+
+  MarkdownMetadataCacheEntry entry = ProbeMarkdownMetadata(file);
+  // Avoid caching a transient read failure as a permanent result.
+  if (!entry.readOk) {
+    static const MarkdownMetadataCacheEntry kUncached{};
+    it = gMarkdownMetadataCache.find(file.path);
+    if (it != gMarkdownMetadataCache.end()) return it->second;
+    return kUncached;
+  }
+
+  if (gMarkdownMetadataCache.size() >= kPinnedCacheLimit) gMarkdownMetadataCache.clear();
+  auto inserted = gMarkdownMetadataCache.emplace(file.path, std::move(entry));
+  return inserted.first->second;
+}
+
+bool IsMarkdownFilePinned(const NoteFile& file) {
+  if (file.metadata.hasFrontMatter) return file.metadata.pinned;
+  return GetMarkdownMetadata(file).pinned;
 }
 
 std::wstring TryParseTomlTitle(const std::vector<std::wstring>& lines, size_t& contentStartLine) {
@@ -793,8 +901,32 @@ std::wstring ExtractSingleFileGroupTitle(const std::wstring& path, NoteGroupType
   return sourceStem.empty() ? sourceName : sourceStem;
 }
 
-std::wstring ExtractMarkdownDisplayName(const std::wstring& path, const std::wstring& fallback) {
-  return ExtractMarkdownTitleByContent(path, fallback);
+std::wstring BuildMarkdownDisplayName(const NoteFile& file, const std::wstring& fallback) {
+  const MarkdownMetadata& metadata = file.metadata;
+  if (metadata.nameResolved) {
+    if (!metadata.title.empty()) return AppendMarkdownAuthor(metadata.title, metadata.author);
+    if (!metadata.headingTitle.empty()) return AppendMarkdownAuthor(metadata.headingTitle, metadata.author);
+    return fallback;
+  }
+  // The probe only saw a prefix that was not conclusive; reproduce the full
+  // read so the result matches a complete scan.
+  return ExtractMarkdownTitleByContent(file.path, fallback);
+}
+
+void FillNoteFileMetadata(NoteFile& file) {
+  if (!IsMarkdownFileName(file.name)) {
+    file.metadata = MarkdownMetadata{};
+    return;
+  }
+  const MarkdownMetadataCacheEntry& entry = GetMarkdownMetadata(file);
+  file.metadata.hasFrontMatter = entry.hasFrontMatter;
+  file.metadata.pinned = entry.pinned;
+  file.metadata.title = entry.title;
+  file.metadata.author = entry.author;
+  file.metadata.hasTitle = !entry.title.empty();
+  file.metadata.headingTitle = entry.headingTitle;
+  file.metadata.scannedWholeFile = entry.scannedWholeFile;
+  file.metadata.nameResolved = entry.nameResolved;
 }
 
 std::wstring ChooseCreateExtension(const NoteGroupConfig& group) {
@@ -947,16 +1079,7 @@ std::wstring FormatWindowsErrorMessage(DWORD error) {
 }
 }
 
-bool LoadNotesConfig(const std::wstring& path, NotesConfig& config) {
-  if (GetFileAttributesW(path.c_str()) == INVALID_FILE_ATTRIBUTES) {
-    return false;
-  }
-
-  IniFile ini;
-  if (!ini.LoadUtf8(path)) {
-    return false;
-  }
-
+void LoadNotesConfigFromIni(const IniFile& ini, NotesConfig& config) {
   config = NotesConfig{};
   const wchar_t* globalSection = L"default";
   if (!ini.HasSection(globalSection) && ini.HasSection(L"notes_default")) {
@@ -1075,8 +1198,7 @@ bool LoadNotesConfig(const std::wstring& path, NotesConfig& config) {
     config.todoDefaults.itemActions = config.todoDefaults.groupActions;
   }
 
-  std::vector<std::wstring> sections = ini.GetSectionNames();
-  for (const std::wstring& section : sections) {
+  for (const std::wstring& section : ini.GetSectionNames()) {
     if (section.rfind(L"action.", 0) == 0 || section.rfind(L"file_action.", 0) == 0 || section.rfind(L"dir_action.", 0) == 0) {
       ActionConfig action{};
       if (section.rfind(L"action.", 0) == 0) {
@@ -1151,8 +1273,6 @@ bool LoadNotesConfig(const std::wstring& path, NotesConfig& config) {
       }
     }
   }
-
-  return true;
 }
 
 void LoadNoteFiles(const NoteGroupConfig& group, std::vector<NoteFile>& files, NoteGroupLoadState* state, bool ignoreMaxItems) {
@@ -1312,13 +1432,16 @@ void LoadNoteFiles(const NoteGroupConfig& group, std::vector<NoteFile>& files, N
     files.resize(group.maxItems);
   }
   if (group.type == NoteGroupType::Directory) {
+    // Only the files that stay visible are probed, and the front matter read
+    // for pin detection is reused for their display names afterwards.
     for (NoteFile& file : files) {
       const size_t fileDot = file.name.find_last_of(L'.');
       const std::wstring fileExtension = fileDot == std::wstring::npos
         ? L""
         : ToLower(NormalizeExtension(file.name.substr(fileDot)));
       if (fileExtension == L".md") {
-        file.displayName = ExtractMarkdownDisplayName(file.path, file.stem);
+        FillNoteFileMetadata(file);
+        file.displayName = BuildMarkdownDisplayName(file, file.stem);
         file.itemText = StripMarkdownLinePrefix(file.displayName);
         if (file.itemText.empty()) file.itemText = file.stem;
       } else {
@@ -1330,6 +1453,10 @@ void LoadNoteFiles(const NoteGroupConfig& group, std::vector<NoteFile>& files, N
   if (files.empty() && state) {
     *state = NoteGroupLoadState::Empty;
   }
+}
+
+void InvalidateMarkdownMetadata(const std::wstring& path) {
+  gMarkdownMetadataCache.erase(path);
 }
 
 bool IsMarkdownNoteFile(const NoteFile& file) {
@@ -1411,7 +1538,7 @@ bool SetNoteFilePinned(const NoteFile& file, bool pinned, std::wstring* errorMes
 
   if (!changed) return true;
   if (!WriteEditableTextFile(file.path, textFile, lines, errorMessage)) return false;
-  gPinnedCache.erase(file.path);
+  InvalidateMarkdownMetadata(file.path);
   return true;
 }
 

@@ -34,6 +34,8 @@ std::wstring DecodeUtf8(const std::string& bytes) {
 
 bool IniFile::LoadUtf8(const std::wstring& path) {
   sections_.clear();
+  sectionIndex_.clear();
+  sectionNames_.clear();
 
   std::ifstream input(path, std::ios::binary);
   if (!input) return false;
@@ -49,7 +51,7 @@ bool IniFile::LoadUtf8(const std::wstring& path) {
   std::wstring content = DecodeUtf8(bytes);
   if (!bytes.empty() && content.empty()) return false;
 
-  std::wstring currentSection;
+  SectionEntry* currentSection = nullptr;
   size_t start = 0;
   while (start <= content.size()) {
     size_t end = content.find_first_of(L"\r\n", start);
@@ -61,36 +63,29 @@ bool IniFile::LoadUtf8(const std::wstring& path) {
     if (!line.empty() && line[0] != L';' && line[0] != L'#') {
       if (line.front() == L'[' && line.back() == L']' && line.size() >= 2) {
         const std::wstring originalSection = Trim(line.substr(1, line.size() - 2));
-        currentSection = ToLower(originalSection);
-        bool known = false;
-        for (const SectionEntry& section : sections_) {
-          if (section.normalizedName == currentSection) {
-            known = true;
-            break;
-          }
+        const std::wstring normalizedSection = ToLower(originalSection);
+        auto it = sectionIndex_.find(normalizedSection);
+        if (it == sectionIndex_.end()) {
+          sectionIndex_.emplace(normalizedSection, sections_.size());
+          sectionNames_.push_back(originalSection);
+          sections_.resize(sections_.size() + 1);
+          currentSection = &sections_.back();
+          currentSection->originalName = originalSection;
+          currentSection->normalizedName = normalizedSection;
+        } else {
+          currentSection = &sections_[it->second];
         }
-        if (!known) {
-          sections_.push_back({originalSection, currentSection, {}});
-        }
-      } else {
+      } else if (currentSection) {
         size_t split = line.find(L'=');
-        if (split != std::wstring::npos && !currentSection.empty()) {
+        if (split != std::wstring::npos) {
           std::wstring key = ToLower(Trim(line.substr(0, split)));
           std::wstring value = Trim(line.substr(split + 1));
-          for (auto& section : sections_) {
-            if (section.normalizedName != currentSection) continue;
-            bool updated = false;
-            for (auto& item : section.items) {
-              if (item.first == key) {
-                item.second = value;
-                updated = true;
-                break;
-              }
-            }
-            if (!updated) {
-              section.items.push_back({key, value});
-            }
-            break;
+          auto item = currentSection->itemIndex.find(key);
+          if (item != currentSection->itemIndex.end()) {
+            currentSection->items[item->second].second = std::move(value);
+          } else {
+            currentSection->itemIndex.emplace(key, currentSection->items.size());
+            currentSection->items.push_back({std::move(key), std::move(value)});
           }
         }
       }
@@ -107,19 +102,17 @@ bool IniFile::LoadUtf8(const std::wstring& path) {
   return true;
 }
 
+const IniFile::SectionEntry* IniFile::FindSection(const std::wstring& normalizedSection) const {
+  auto it = sectionIndex_.find(normalizedSection);
+  return it == sectionIndex_.end() ? nullptr : &sections_[it->second];
+}
+
 std::wstring IniFile::GetString(const std::wstring& section, const std::wstring& key, const std::wstring& def) const {
-  const std::wstring normalizedSection = ToLower(section);
-  const std::wstring normalizedKey = ToLower(key);
-  for (const auto& entry : sections_) {
-    if (entry.normalizedName != normalizedSection) continue;
-    for (const auto& item : entry.items) {
-      if (item.first == normalizedKey) {
-        return item.second;
-      }
-    }
-    return def;
-  }
-  return def;
+  const SectionEntry* entry = FindSection(ToLower(section));
+  if (!entry) return def;
+  auto item = entry->itemIndex.find(ToLower(key));
+  if (item == entry->itemIndex.end()) return def;
+  return entry->items[item->second].second;
 }
 
 int IniFile::GetInt(const std::wstring& section, const std::wstring& key, int def) const {
@@ -140,31 +133,11 @@ bool IniFile::GetBool(const std::wstring& section, const std::wstring& key, bool
 }
 
 bool IniFile::HasSection(const std::wstring& section) const {
-  const std::wstring normalizedSection = ToLower(section);
-  for (const auto& entry : sections_) {
-    if (entry.normalizedName == normalizedSection) return true;
-  }
-  return false;
+  return FindSection(ToLower(section)) != nullptr;
 }
 
 bool IniFile::HasKey(const std::wstring& section, const std::wstring& key) const {
-  const std::wstring normalizedSection = ToLower(section);
-  const std::wstring normalizedKey = ToLower(key);
-  for (const auto& entry : sections_) {
-    if (entry.normalizedName != normalizedSection) continue;
-    for (const auto& item : entry.items) {
-      if (item.first == normalizedKey) return true;
-    }
-    return false;
-  }
-  return false;
-}
-
-std::vector<std::wstring> IniFile::GetSectionNames() const {
-  std::vector<std::wstring> names;
-  names.reserve(sections_.size());
-  for (const SectionEntry& section : sections_) {
-    names.push_back(section.originalName);
-  }
-  return names;
+  const SectionEntry* entry = FindSection(ToLower(section));
+  if (!entry) return false;
+  return entry->itemIndex.find(ToLower(key)) != entry->itemIndex.end();
 }
