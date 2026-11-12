@@ -121,5 +121,8 @@ jobs:
           tag_name: ${{ steps.version.outputs.tag }}
           name: MyBuddy v${{ steps.version.outputs.version }}
           body_path: ${{ steps.release_notes.outputs.path }}
+          # Named explicitly instead of a glob so the Debug zip (which the glob
+          # MyBuddy-v*-windows-x64.zip cannot match anyway) and any stale file
+          # from a previous version can never be attached.
           files: |
-            MyBuddy-v*-windows-x64.zip
+            MyBuddy-v${{ steps.version.outputs.version }}-windows-x64.zip

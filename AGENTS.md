@@ -32,8 +32,8 @@
 - Workflow artifacts (uploaded under the artifact name `MyBuddy`):
   - `MyBuddy-v$version-windows-x64-Debug.zip` containing `MyBuddy-Debug.exe`
   - `MyBuddy-v$version-windows-x64.zip` containing `MyBuddy.exe`
-- The GitHub Release attaches only the Release zip, via the glob
-  `MyBuddy-v*-windows-x64.zip`. The Release zip is named
-  `MyBuddy-v$version-windows-x64.zip` (no `-Release` suffix), so the old claim
-  of a `-Release.zip` attachment name was wrong.
+- The GitHub Release attaches exactly one asset,
+  `MyBuddy-v$version-windows-x64.zip` (containing `MyBuddy.exe`). The upload step
+  names that file explicitly rather than using a wildcard, so the Debug zip and
+  any file left over from an earlier version are never attached.
 - Release notes are generated from `git log` since the previous tag.
