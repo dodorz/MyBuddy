@@ -830,7 +830,13 @@ std::wstring AppendMarkdownAuthor(std::wstring title, const std::wstring& author
 std::wstring ExtractNoteBaseName(const std::wstring& path) {
   std::wstring text = ReadTextFilePrefix(path, 64 * 1024);
   std::vector<std::wstring> lines = SplitLines(text);
-  std::wstring extension = ToLower(NormalizeExtension(path.substr(path.find_last_of(L'.'))));
+  // A path without any dot (or an empty path) has no extension; passing
+  // npos to substr() would throw std::out_of_range instead of returning a
+  // name. Keep the same shape as ExtractTextGroupTitle below.
+  const size_t dot = path.find_last_of(L'.');
+  std::wstring extension = dot == std::wstring::npos
+    ? L""
+    : ToLower(NormalizeExtension(path.substr(dot)));
 
   std::wstring candidate;
   if (extension == L".md") {
@@ -1323,7 +1329,10 @@ void LoadNoteFiles(const NoteGroupConfig& group, std::vector<NoteFile>& files, N
     }
 
     std::vector<std::wstring> lines = SplitLines(ReadTextFile(group.path));
-    const std::wstring sourceName = group.path.substr(group.path.find_last_of(L"\\/") + 1);
+    const size_t sourceSlash = group.path.find_last_of(L"\\/");
+    const std::wstring sourceName = sourceSlash == std::wstring::npos
+      ? group.path
+      : group.path.substr(sourceSlash + 1);
     const std::wstring sourceStem = GetFileStem(sourceName);
     const std::wstring sourceDir = GetParentDir(group.path);
     if (group.type == NoteGroupType::TodoTxt) {
@@ -1346,7 +1355,10 @@ void LoadNoteFiles(const NoteGroupConfig& group, std::vector<NoteFile>& files, N
       }
     } else {
       size_t contentStart = 0;
-      const std::wstring sourceExtension = ToLower(NormalizeExtension(group.path.substr(group.path.find_last_of(L'.'))));
+      const size_t sourceDot = group.path.find_last_of(L'.');
+      const std::wstring sourceExtension = sourceDot == std::wstring::npos
+        ? L""
+        : ToLower(NormalizeExtension(group.path.substr(sourceDot)));
       if (sourceExtension == L".md") {
         TryFindTomlFrontMatter(lines, contentStart);
         size_t firstContentLine = contentStart;

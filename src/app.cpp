@@ -1,5 +1,6 @@
 #include "app.h"
 
+#include "diagnostics.h"
 #include "ini.h"
 #include "resource.h"
 #include "state.h"
@@ -7,6 +8,7 @@
 #include <commctrl.h>
 #include <shellapi.h>
 #include <shlobj.h>
+#include <strsafe.h>
 #include <windowsx.h>
 
 #include <algorithm>
@@ -1339,7 +1341,12 @@ int App::Run(HINSTANCE instance, int showCmd) {
   INITCOMMONCONTROLSEX icc{ sizeof(icc), ICC_WIN95_CLASSES };
   InitCommonControlsEx(&icc);
   singleInstanceMutex_ = CreateMutexW(nullptr, TRUE, kSingleInstanceMutexName);
-  if (!singleInstanceMutex_) return 0;
+  if (!singleInstanceMutex_) {
+    // Every silent exit gets a log line: without it a startup failure is
+    // indistinguishable from "nothing happened".
+    LogDiagnostic(L"startup: CreateMutexW failed, exiting silently");
+    return 0;
+  }
   if (GetLastError() == ERROR_ALREADY_EXISTS) {
     HWND existing = FindWindowW(kMainClass, nullptr);
     if (existing) {
@@ -1347,6 +1354,12 @@ int App::Run(HINSTANCE instance, int showCmd) {
       GetWindowThreadProcessId(existing, &processId);
       if (processId != 0) AllowSetForegroundWindow(processId);
       PostMessageW(existing, kSingleInstanceShowMsg, 0, 0);
+      wchar_t line[160];
+      StringCchPrintfW(line, 160, L"startup: already running (pid=%lu), show request posted",
+        static_cast<unsigned long>(processId));
+      LogDiagnostic(line);
+    } else {
+      LogDiagnostic(L"startup: single-instance mutex exists but no main window was found");
     }
     CloseHandle(singleInstanceMutex_);
     singleInstanceMutex_ = nullptr;
@@ -1365,7 +1378,13 @@ int App::Run(HINSTANCE instance, int showCmd) {
     IMAGE_ICON, GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), LR_DEFAULTCOLOR));
   wc.lpszClassName = kMainClass;
   wc.cbWndExtra = sizeof(LONG_PTR);
-  RegisterClassExW(&wc);
+  if (!RegisterClassExW(&wc)) {
+    wchar_t line[160];
+    StringCchPrintfW(line, 160, L"startup: RegisterClassExW failed (error=%lu)",
+      static_cast<unsigned long>(GetLastError()));
+    LogDiagnostic(line);
+    return 0;
+  }
 
   const std::wstring title = L"MyBuddy";
 
@@ -1382,7 +1401,14 @@ int App::Run(HINSTANCE instance, int showCmd) {
     nullptr,
     instance_,
     this);
-  if (!hwnd_) return 0;
+  if (!hwnd_) {
+    wchar_t line[160];
+    StringCchPrintfW(line, 160, L"startup: CreateWindowExW failed (error=%lu)",
+      static_cast<unsigned long>(GetLastError()));
+    LogDiagnostic(line);
+    return 0;
+  }
+  LogDiagnostic(L"startup: main window created");
 
   SendMessageW(hwnd_, WM_SETICON, ICON_BIG, reinterpret_cast<LPARAM>(wc.hIcon));
   SendMessageW(hwnd_, WM_SETICON, ICON_SMALL, reinterpret_cast<LPARAM>(wc.hIconSm));
@@ -1425,8 +1451,17 @@ LRESULT App::HandleMainMessage(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
       // the note lists, reading note files and setting up filesystem watchers
       // runs on the first idle pass so the window appears earlier.
       LoadConfig();
+      // Warnings here only reach DebugView otherwise; the log is what a user
+      // on another machine can actually send back.
+      LogDiagnostic(currentConfigPath_.empty()
+        ? L"config: no config.ini path resolved"
+        : (L"config: loaded " + currentConfigPath_).c_str());
+      for (const std::wstring& warning : hotKeyWarnings_) {
+        LogDiagnostic((L"config: " + warning).c_str());
+      }
       stateLoaded_ = LoadState();
       if (!stateLoaded_) {
+        LogDiagnostic(L"state: no saved state, using defaults");
         InitializeDefaultState();
       }
       ApplyHotKeys();
@@ -1447,6 +1482,11 @@ LRESULT App::HandleMainMessage(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         if (pendingInitialLoad_) {
           pendingInitialLoad_ = false;
           RefreshNotes();
+          wchar_t line[128];
+          StringCchPrintfW(line, 128, L"notes: initial load finished, %d group(s), %d row(s)",
+            static_cast<int>(notesConfig_.groups.size()),
+            static_cast<int>(visibleRows_.size()));
+          LogDiagnostic(line);
         }
         SetTimer(hwnd_, kAutoHideTimerId, kAutoHidePollMs, nullptr);
         SetTimer(hwnd_, kAutoRefreshTimerId, kAutoRefreshPollMs, nullptr);
@@ -3015,7 +3055,14 @@ void App::RebuildVisibleRows() {
   if (!globalStatusMessage_.empty()) {
     visibleRows_.push_back({VisibleRow::Type::GlobalMessage, -1, -1});
   }
-  for (int i = 0; i < static_cast<int>(notesConfig_.groups.size()); ++i) {
+  // Rows are rebuilt from a partly filled model: the first frame only has the
+  // "Loading notes..." message, and the per-group vectors are filled by
+  // RefreshNotes() on the deferred init pass. Only iterate loaded groups so an
+  // empty expandedGroups_/groupStates_/notesByGroup_ is never indexed.
+  const int groupCount = static_cast<int>(std::min({
+    notesConfig_.groups.size(), expandedGroups_.size(),
+    groupStates_.size(), notesByGroup_.size()}));
+  for (int i = 0; i < groupCount; ++i) {
     visibleRows_.push_back({VisibleRow::Type::Group, i, -1, -1});
     if (!expandedGroups_[i]) continue;
     if (groupStates_[i] != NoteGroupLoadState::Ok || notesByGroup_[i].empty()) {

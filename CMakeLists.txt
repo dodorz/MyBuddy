@@ -7,6 +7,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 add_executable(MyBuddy WIN32
   src/main.cpp
   src/app.cpp
+  src/diagnostics.cpp
   src/ini.cpp
   src/MyBuddy.rc
   src/notes.cpp
@@ -15,7 +16,7 @@ add_executable(MyBuddy WIN32
 )
 
 target_include_directories(MyBuddy PRIVATE src)
-target_link_libraries(MyBuddy PRIVATE user32 gdi32 comctl32 shell32 advapi32)
+target_link_libraries(MyBuddy PRIVATE user32 gdi32 comctl32 shell32 advapi32 dbghelp)
 if(MINGW)
   target_link_options(MyBuddy PRIVATE -municode)
 endif()

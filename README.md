@@ -20,6 +20,15 @@ cmake --build --preset vs-x64-release
 - `state.dat` is for runtime state only.
 - Start from [config.ini.example](/C:/~/%5CProjects%5CMyBuddy%5Cconfig.ini.example).
 
+## Diagnostics
+
+- `%AppData%\MyBuddy\diagnostics.log` records startup progress, the resolved
+  `config.ini` path, hotkey warnings, and every silent exit from `App::Run()`.
+- An unhandled startup error (for example `0xC000041D`) writes a report to that
+  log, saves a `crash-*.dmp` minidump next to it, and shows a message box instead
+  of exiting without a trace.
+- The log rotates to `diagnostics.log.previous` once it passes 512 KB.
+
 ## Edge docking
 
 - Drag the window close to a screen edge to dock it; dragging it away undocks it.
